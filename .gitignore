@@ -1,0 +1,72 @@
+# --- Unity caches / autogenerados (NO versionar) ---
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Mm]emoryCaptures/
+[Uu]ser[Ss]ettings/
+[Rr]ecordings/
+[Cc]rashReports/
+[Ss]criptAssemblies/
+[Aa]ssets/**/.DS_Store
+
+# Addressables (datos generados en StreamingAssets)
+[Aa]ssets/StreamingAssets/aa/
+[Aa]ssets/AddressableAssetsData/*/*.bin*
+# Si subís Addressables a servidor, versioná solo la config (.asset, .json) y no los binarios.
+
+# Asset Store Tools (si los usás)
+[Aa]ssets/AssetStoreTools*
+
+# --- IDEs / soluciones .NET (autogenerados) ---
+.vs/
+.idea/
+.vscode/
+*.sln
+*.csproj
+*.csproj.user
+*.unityproj
+*.pidb
+*.suo
+*.user
+*.userprefs
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# --- SO (Windows / macOS) ---
+[Dd]esktop.ini
+[Tt]humbs.db
+.DS_Store
+
+# --- Exportados / builds finales ---
+*.apk
+*.aab
+*.ipa
+*.app
+*.xcworkspace/
+*.xcodeproj/
+DerivedData/
+xcuserdata/
+Pods/
+
+# --- Logs / trazas ---
+*.stacktrace
+
+# --- Unity Cloud / Cache server (por si aparece local) ---
+[Cc]ache/
+
+# --- Por si usás git-merge y quedan restos ---
+*.orig
+
+# --- IMPORTANTES que SÍ deben quedar versionados ---
+# (Estas excepciones son por si en algún momento ignorás de más)
+!*.meta
+!ProjectSettings/**
+!Packages/manifest.json
+!Packages/packages-lock.json
