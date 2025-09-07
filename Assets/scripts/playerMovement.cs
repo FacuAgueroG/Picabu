@@ -165,6 +165,9 @@ public class Player2DController : MonoBehaviour {
     private Collider2D dropThroughCollider = null;
     private float dropThroughTimer = 0f;
 
+    // WallGrab lock mientras dura el drop-through real
+    private bool dropBlockWallGrabActive = false;
+
     // <<< NUEVO: lista de OneWays ignoradas durante DASH ascendente >>>
     private readonly List<Collider2D> tempIgnoredOneWays = new List<Collider2D>();
 
@@ -190,7 +193,6 @@ public class Player2DController : MonoBehaviour {
         currentRunSpeed = Mathf.Max(runSpeedMin, baseSpeed);
         runSpeedMax = Mathf.Max(runSpeedMax, runSpeedMin);
     }
-
     private void Update() {
         executedJumpThisFrame = false;
 
@@ -258,7 +260,7 @@ public class Player2DController : MonoBehaviour {
         // Tick del lock de wall-jump
         if (wallJumpLockTimer > 0f) wallJumpLockTimer -= Time.deltaTime;
 
-        // Tick drop-through (para filtrarlo en raycasts de suelo)
+        // Tick drop-through (solo para filtro de raycasts de suelo)
         if (dropThroughActive) {
             dropThroughTimer -= Time.deltaTime;
             if (dropThroughTimer <= 0f) {
@@ -267,6 +269,7 @@ public class Player2DController : MonoBehaviour {
             }
         }
     }
+
     private void FixedUpdate() {
         if (isDashing) return; // el dash mueve por corrutina
 
@@ -298,7 +301,7 @@ public class Player2DController : MonoBehaviour {
         }
 
         // WallGrab: si estás pegado (y no deslizando), inmoviliza por completo
-        if (isWallGrabbing && !isWallSliding) {
+        if (isWallGrabbing && !isWallSliding && !dropBlockWallGrabActive) {
             rb.velocity = Vector2.zero;
         }
 
@@ -400,7 +403,8 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void UpdateWallDetectionAndStates(float dt) {
-        if (!enableWallGrab) {
+        // Bloqueo TOTAL del sistema de pared mientras dura el drop-through real
+        if (!enableWallGrab || dropBlockWallGrabActive) {
             isOnWall = isWallGrabbing = isWallSliding = false;
             wallSide = WallSide.None;
             if (wallRegrabTimer > 0f) wallRegrabTimer -= dt;
@@ -479,7 +483,6 @@ public class Player2DController : MonoBehaviour {
         wallSide = WallSide.None;
     }
     #endregion
-
     #region Jump (Immediate + Hold + Coyote + Buffer + Wall Jump con lock)
     private void HandleJumpInput_ImmediatePressHold(bool jumpDown, bool jumpUp) {
         // Wall-jump tiene prioridad si estamos en pared
@@ -675,7 +678,7 @@ public class Player2DController : MonoBehaviour {
             var h = hits[i];
             if (h.collider == null) continue;
 
-            // <<< NUEVO: si vamos hacia ARRIBA, ignorar plataformas OneWay como obstáculos
+            // si vamos hacia ARRIBA, ignorar plataformas OneWay como obstáculos
             if (dir.y > 0f && IsOneWayPlatform(h.collider)) continue;
 
             if (h.distance < minHitDist) {
@@ -733,7 +736,7 @@ public class Player2DController : MonoBehaviour {
             return false; // pegado a pared o sin espacio: NO consume carga
         }
 
-        // <<< NUEVO: si dash es ascendente, ignorar temporalmente las OneWay que haya en la trayectoria
+        // si dash es ascendente, ignorar temporalmente las OneWay que haya en la trayectoria
         if (dir.y > 0f) {
             PrepareUpwardDashIgnoreOneWays(dir, allowedDistance);
         }
@@ -796,7 +799,7 @@ public class Player2DController : MonoBehaviour {
             fallContext = FallRampContext.FromDash;
         }
 
-        // <<< NUEVO: restaurar colisiones con OneWay ignoradas durante dash ascendente
+        // restaurar colisiones con OneWay ignoradas durante dash ascendente
         RestoreIgnoredOneWaysAfterDash();
 
         isDashing = false;
@@ -886,7 +889,6 @@ public class Player2DController : MonoBehaviour {
     // Ignora temporalmente las OneWay en la trayectoria del dash ascendente
     private void PrepareUpwardDashIgnoreOneWays(Vector2 dir, float distance) {
         tempIgnoredOneWays.Clear();
-        // Sólo buscamos en las capas marcadas como one-way para evitar ignorar otras cosas.
         if (oneWayMask.value == 0) return;
 
         ContactFilter2D filter = new ContactFilter2D();
@@ -901,7 +903,6 @@ public class Player2DController : MonoBehaviour {
             if (c == null) continue;
             if (!IsOneWayPlatform(c)) continue;
 
-            // Evita doble agregado
             if (!tempIgnoredOneWays.Contains(c)) {
                 Physics2D.IgnoreCollision(col, c, true);
                 tempIgnoredOneWays.Add(c);
@@ -925,6 +926,9 @@ public class Player2DController : MonoBehaviour {
         dropThroughCollider = platform;
         dropThroughTimer = duration;
 
+        // Bloquea el sistema de wall-grab SOLO durante el tiempo real de drop
+        dropBlockWallGrabActive = true;
+
         // Ignoramos colisión con esa plataforma por un rato
         Physics2D.IgnoreCollision(col, platform, true);
 
@@ -941,6 +945,9 @@ public class Player2DController : MonoBehaviour {
 
         // Rehabilitamos la colisión
         Physics2D.IgnoreCollision(col, platform, false);
+
+        // Fin del bloqueo de wall-grab (ya salimos del volumen de la plataforma)
+        dropBlockWallGrabActive = false;
 
         // Pequeña tolerancia para que el raycast no la detecte inmediatamente
         dropThroughTimer = 0.05f;
@@ -987,4 +994,3 @@ public class Player2DController : MonoBehaviour {
         }
     }
 }
-
