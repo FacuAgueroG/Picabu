@@ -1,0 +1,38 @@
+Falta agregar 
+el aumento de velocidad al correr (de un min a un max rampeando)
+mejora del control aéreo
+poder saltar hacia abajo en una plataforma con colisionador de un solo lado
+
+
+Como funciona
+
+Salto (se puede mantener y salta mas)
+El segundo salto no tiene esta función (creo que en hollow knight si)
+Para cargar el salto debe tocar el suelo
+Hay control aéreo del salto
+Cae mas rápido de lo que sube
+
+Dash en 8 direcciones (solo aéreo)
+Maximo dos cargas (cada una se carga de forma independiente)
+Si estoy en el suelo no puedo dashear hacia arriba
+
+_____________________________
+
+Posibles problemas
+
+Actualmente existe la posibilidad de hacer dash hacia abajo (y en diagonal abajo) lo cual no tiene mucho sentido ya que una vez que termina el dash se vuelve a activar la gravedad base y la velocidad con la que se comienza a viajar hacia abajo es menor a la de la velocidad con la que se vuela hacia abajo con el dash
+
+La vida perdida se puede recuperar si se sigue golpeando como en bloodborne
+
+La vida perdida permanentemente se puede ganar eliminando monstruos, si se eliminan monstruos estos sueltan una escencia que marca una x cantidad de vida que se puede recargar pero no se gana de inmediato, para que esa vida marcada sea permanente hay que golpear monstruos rápidamente. 
+
+Otra forma de ganar vida es con los checkpoints.
+
+
+
+
+
+
+
+
+

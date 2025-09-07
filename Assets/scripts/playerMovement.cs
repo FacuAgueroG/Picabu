@@ -1,5 +1,6 @@
 ﻿using UnityEngine;
 using System.Collections;
+using System.Collections.Generic; // <<< NUEVO
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(Collider2D))]
@@ -63,11 +64,11 @@ public class Player2DController : MonoBehaviour {
     [SerializeField] private float wallGrabHoldTime = 0.2f;
     [SerializeField] private float wallSlideGravityMultiplier = 0.6f;
     [SerializeField] private float wallRegrabCooldown = 0.15f;
-    [SerializeField] private float wallJumpHorizontalForce = 8f;   // (se mantiene para compatibilidad)
-    [SerializeField] private float wallJumpVerticalForce = 10f;  // (se mantiene para compatibilidad)
+    [SerializeField] private float wallJumpHorizontalForce = 8f;   // (compat)
+    [SerializeField] private float wallJumpVerticalForce = 10f;    // (compat)
     [SerializeField] private float wallJumpOppositeMultiplier = 1.3f;
-    [SerializeField] private float wallJumpHorizontalLaunchSpeed = 10f; // <<< NUEVO: velocidad X de lanzamiento
-    [SerializeField] private float wallJumpLockTime = 0.12f;            // <<< NUEVO: tiempo de bloqueo de control horario
+    [SerializeField] private float wallJumpHorizontalLaunchSpeed = 10f;
+    [SerializeField] private float wallJumpLockTime = 0.12f;
     [SerializeField] private bool wallCountsAsGroundForDash = true;
 
     [Header("Sprite Flip")]
@@ -75,6 +76,27 @@ public class Player2DController : MonoBehaviour {
 
     [Header("Debug")]
     [SerializeField] private bool drawGizmos = true;
+
+    // === Apex Bonus ===
+    [Header("Apex Bonus")]
+    public float apexVyThreshold = 1.0f;
+    public float apexBonusSpeedMultiplier = 1.15f;
+    public float apexBonusAccelMultiplier = 1.15f;
+
+    // === Velocidad que crece en suelo ===
+    [Header("Ground Run Speed Gain")]
+    public float runSpeedMin = 0f;         // si es 0, se toma baseSpeed en Awake
+    public float runSpeedMax = 8f;
+    public float runGainPerSecond = 2.0f;
+    public float runDecayPerSecond = 4.0f;
+
+    // === One-way Platforms (Drop-through) ===
+    [Header("One-Way Platforms (Drop-Through)")]
+    public bool allowDropThrough = true;
+    public LayerMask oneWayMask;           // capa(s) de plataformas one-way
+    public string oneWayTag = "OneWay";    // opcional
+    public float dropThroughDuration = 0.25f;
+    public bool treatOneWayAsGround = true;
 
     private Rigidbody2D rb;
     private Collider2D col;
@@ -123,12 +145,28 @@ public class Player2DController : MonoBehaviour {
     private float wallRegrabTimer = 0f;
 
     // Wall-jump lock
-    private float wallJumpLockTimer = 0f; // <<< NUEVO
+    private float wallJumpLockTimer = 0f;
 
     private enum FallRampContext { None, FromJump, FromDash }
     private FallRampContext fallContext = FallRampContext.None;
 
     private bool executedJumpThisFrame = false;
+
+    // Velocidad "base" dinámica para correr en suelo
+    private float currentRunSpeed;
+
+    // Multiplicadores actuales por apex
+    private float apexSpeedMultNow = 1f;
+    private float apexAccelMultNow = 1f;
+
+    // OneWay tracking
+    private Collider2D lastGroundCollider = null;
+    private bool dropThroughActive = false;
+    private Collider2D dropThroughCollider = null;
+    private float dropThroughTimer = 0f;
+
+    // <<< NUEVO: lista de OneWays ignoradas durante DASH ascendente >>>
+    private readonly List<Collider2D> tempIgnoredOneWays = new List<Collider2D>();
 
     private void Awake() {
         rb = GetComponent<Rigidbody2D>();
@@ -136,6 +174,7 @@ public class Player2DController : MonoBehaviour {
         rb.gravityScale = Mathf.Max(0.1f, rb.gravityScale);
         facingRight = faceRightDefault;
 
+        // Inicializa charges de dash
         int n = Mathf.Max(1, dashMaxCharges);
         dashCooldownLeft = new float[n];
         dashReady = new bool[n];
@@ -145,6 +184,11 @@ public class Player2DController : MonoBehaviour {
             dashReady[i] = true;
             dashAwaitGround[i] = false;
         }
+
+        // Inicializa velocidad dinámica de suelo
+        if (runSpeedMin <= 0f) runSpeedMin = baseSpeed;
+        currentRunSpeed = Mathf.Max(runSpeedMin, baseSpeed);
+        runSpeedMax = Mathf.Max(runSpeedMax, runSpeedMin);
     }
 
     private void Update() {
@@ -173,12 +217,27 @@ public class Player2DController : MonoBehaviour {
         bool jumpUp = Input.GetKeyUp(jumpKey);
         jumpHeld = Input.GetKey(jumpKey);
 
-        // Buffer de salto
-        if (jumpDown) jumpBufferTimer = jumpBufferTime;
-        else if (jumpBufferTimer > 0f) jumpBufferTimer -= Time.deltaTime;
+        // === Drop-through: S + salto sobre one-way ===
+        bool consumedByDrop = false;
+        if (allowDropThrough && jumpDown && Input.GetKey(KeyCode.S) && isGrounded && IsOneWayPlatform(lastGroundCollider)) {
+            StartCoroutine(DropThroughRoutine(lastGroundCollider, dropThroughDuration));
+            executedJumpThisFrame = true;
+            consumedByDrop = true;     // no cargar buffer ni procesar salto
+        }
 
-        // Saltos (incluye wall-jump con lock)
-        HandleJumpInput_ImmediatePressHold(jumpDown, jumpUp);
+        // Buffer de salto (solo si NO se consumió por drop-through)
+        if (!consumedByDrop) {
+            if (jumpDown) jumpBufferTimer = jumpBufferTime;
+            else if (jumpBufferTimer > 0f) jumpBufferTimer -= Time.deltaTime;
+        }
+        else {
+            jumpBufferTimer = 0f;
+        }
+
+        // Saltos (incluye wall-jump con lock) - solo si no se consumió por drop-through
+        if (!executedJumpThisFrame) {
+            HandleJumpInput_ImmediatePressHold(jumpDown, jumpUp);
+        }
 
         // Dash + buffer (prioridad salto)
         if (Input.GetKeyDown(dashKey)) {
@@ -192,26 +251,45 @@ public class Player2DController : MonoBehaviour {
             }
         }
 
-        // Cargas de dash: "ground-like" si en pared y permitido
+        // Cargas de dash
         bool groundLike = isGrounded || (isOnWall && wallCountsAsGroundForDash);
         UpdateDashCharges(Time.deltaTime, groundLike);
 
         // Tick del lock de wall-jump
         if (wallJumpLockTimer > 0f) wallJumpLockTimer -= Time.deltaTime;
+
+        // Tick drop-through (para filtrarlo en raycasts de suelo)
+        if (dropThroughActive) {
+            dropThroughTimer -= Time.deltaTime;
+            if (dropThroughTimer <= 0f) {
+                dropThroughActive = false;
+                dropThroughCollider = null;
+            }
+        }
     }
     private void FixedUpdate() {
         if (isDashing) return; // el dash mueve por corrutina
 
         float dt = Time.fixedDeltaTime;
-        float targetSpeed = moveDir * baseSpeed * speedMultiplier;
+
+        // === Multiplicadores por Apex ===
+        UpdateApexMultipliers();
+
+        // === Velocidad dinámica de suelo ===
+        UpdateGroundRunSpeed(dt);
+
+        float effectiveBaseSpeed = Mathf.Clamp(currentRunSpeed, runSpeedMin, runSpeedMax);
+        float speedWithApex = effectiveBaseSpeed * speedMultiplier * apexSpeedMultNow;
+        float accelWithApex = accel * apexAccelMultNow;
+
+        float targetSpeed = moveDir * speedWithApex;
 
         // === Horizontal ===
         if (wallJumpLockTimer > 0f) {
-            // Durante el lock, conservamos la velocidad horizontal de lanzamiento
             rb.velocity = new Vector2(currentVelX, rb.velocity.y);
         }
         else if (isGrounded || moveDir != 0) {
-            currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accel * dt);
+            currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accelWithApex * dt);
             rb.velocity = new Vector2(currentVelX, rb.velocity.y);
         }
         else {
@@ -237,7 +315,6 @@ public class Player2DController : MonoBehaviour {
         if (Input.GetKeyDown(KeyCode.D)) lastPressedDir = 1;
 
         if (wallJumpLockTimer > 0f) {
-            // Ignorar cambios de input durante el lock (no tocamos moveDir)
             return;
         }
 
@@ -276,17 +353,48 @@ public class Player2DController : MonoBehaviour {
 
     #region Ground & Wall Checks
     private bool CheckGrounded() {
-        return CheckGroundRayAt(groundRayOffsetLeft) || CheckGroundRayAt(groundRayOffsetRight);
+        bool l = CheckGroundRayAt(groundRayOffsetLeft);
+        bool r = CheckGroundRayAt(groundRayOffsetRight);
+        return l || r;
+    }
+
+    private bool IsSameCollider(Collider2D a, Collider2D b) {
+        if (a == null || b == null) return false;
+        return a == b;
     }
 
     private bool CheckGroundRayAt(Vector2 localOffset) {
         Vector2 origin = (Vector2)transform.position + localOffset;
 
+        // 1) Primero intentamos con groundMask
         RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, groundRayLength, groundMask);
-        if (hit.collider != null) return true;
+        if (hit.collider != null) {
+            // Ignorar si es la one-way actualmente en drop-through
+            if (!(dropThroughActive && IsSameCollider(hit.collider, dropThroughCollider))) {
+                lastGroundCollider = hit.collider;
+                return true;
+            }
+        }
 
+        // 2) Sin máscara: aceptar por tag de suelo, o por one-way si está permitido
         RaycastHit2D hitNoMask = Physics2D.Raycast(origin, Vector2.down, groundRayLength);
-        if (hitNoMask.collider != null && hitNoMask.collider.CompareTag(groundTag)) return true;
+        if (hitNoMask.collider != null) {
+            Collider2D c = hitNoMask.collider;
+
+            if (dropThroughActive && IsSameCollider(c, dropThroughCollider)) {
+                return false;
+            }
+
+            if (c.CompareTag(groundTag)) {
+                lastGroundCollider = c;
+                return true;
+            }
+
+            if (treatOneWayAsGround && IsOneWayPlatform(c)) {
+                lastGroundCollider = c;
+                return true;
+            }
+        }
 
         return false;
     }
@@ -450,20 +558,16 @@ public class Player2DController : MonoBehaviour {
         float extraTotal = Mathf.Max(0f, (jumpMaxForce - jumpMinForce) * riseScale);
         jumpExtraImpulseLeft = extraTotal;
         jumpExtraImpulsePerSec = (jumpMaxChargeTime > 0f) ? (extraTotal / jumpMaxChargeTime) : (extraTotal / Mathf.Epsilon);
-
         isJumpingHoldPhase = true;
         jumpHoldTimer = 0f;
     }
 
     private void DoWallJump() {
-        // Siempre alejándose de la pared
         int away = (wallSide == WallSide.Right) ? -1 : +1;
 
-        // Bonus si el jugador mantiene input opuesto
         bool inputOpposite = (away < 0 && Input.GetKey(KeyCode.A)) || (away > 0 && Input.GetKey(KeyCode.D));
         float launchX = wallJumpHorizontalLaunchSpeed * (inputOpposite ? wallJumpOppositeMultiplier : 1f);
 
-        // Reset estados
         rb.velocity = Vector2.zero;
         ExitWallStates();
         wasFalling = false;
@@ -471,12 +575,10 @@ public class Player2DController : MonoBehaviour {
         isSlamming = false;
         fallContext = FallRampContext.FromJump;
 
-        // Lanzamiento: fijamos X directa + impulso vertical
-        currentVelX = away * launchX;                   // <<< clave: sincroniza con el sistema de movimiento
+        currentVelX = away * launchX;
         rb.velocity = new Vector2(currentVelX, 0f);
         rb.AddForce(Vector2.up * wallJumpVerticalForce, ForceMode2D.Impulse);
 
-        // Arranca fase de hold (como un salto normal)
         float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
         float extraTotal = Mathf.Max(0f, (jumpMaxForce - jumpMinForce) * riseScale);
         jumpExtraImpulseLeft = extraTotal;
@@ -484,13 +586,9 @@ public class Player2DController : MonoBehaviour {
         isJumpingHoldPhase = true;
         jumpHoldTimer = 0f;
 
-        // Lock de control horizontal para que no lo cancelen ni el input ni el drag
         wallJumpLockTimer = Mathf.Max(0f, wallJumpLockTime);
-
-        // Anti re-enganche inmediato
         wallRegrabTimer = wallRegrabCooldown;
 
-        // Opcional: orientar sprite hacia el movimiento si querés
         if ((away > 0 && !facingRight) || (away < 0 && facingRight)) {
             facingRight = !facingRight;
             FlipSprite();
@@ -556,8 +654,10 @@ public class Player2DController : MonoBehaviour {
         }
     }
     #endregion
+
     #region Dash (cast + skin), charges, gizmos
 
+    // Modificado: ignora OneWay al dashing hacia arriba
     private float ComputeDashAllowedDistance(Vector2 dir) {
         if (dir.sqrMagnitude <= 0f) return 0f;
 
@@ -567,18 +667,23 @@ public class Player2DController : MonoBehaviour {
         filter.useLayerMask = true;
 
         float maxCheck = Mathf.Max(0f, dashDistance + dashWallSafeDistance);
-        RaycastHit2D[] hits = new RaycastHit2D[8];
+        RaycastHit2D[] hits = new RaycastHit2D[16];
         int count = col.Cast(dir, filter, hits, maxCheck);
 
         float minHitDist = maxCheck;
         for (int i = 0; i < count; i++) {
-            if (hits[i].collider == null) continue;
-            if (hits[i].distance < minHitDist) {
-                minHitDist = hits[i].distance;
+            var h = hits[i];
+            if (h.collider == null) continue;
+
+            // <<< NUEVO: si vamos hacia ARRIBA, ignorar plataformas OneWay como obstáculos
+            if (dir.y > 0f && IsOneWayPlatform(h.collider)) continue;
+
+            if (h.distance < minHitDist) {
+                minHitDist = h.distance;
             }
         }
 
-        float allowed = (count > 0)
+        float allowed = (minHitDist < maxCheck)
             ? Mathf.Clamp(minHitDist - dashWallSafeDistance, 0f, dashDistance)
             : dashDistance;
 
@@ -628,6 +733,11 @@ public class Player2DController : MonoBehaviour {
             return false; // pegado a pared o sin espacio: NO consume carga
         }
 
+        // <<< NUEVO: si dash es ascendente, ignorar temporalmente las OneWay que haya en la trayectoria
+        if (dir.y > 0f) {
+            PrepareUpwardDashIgnoreOneWays(dir, allowedDistance);
+        }
+
         ConsumeDashCharge(readyIdx);
         StartCoroutine(DashRoutine(dir, allowedDistance));
         return true;
@@ -649,7 +759,10 @@ public class Player2DController : MonoBehaviour {
         WaitForFixedUpdate wait = new WaitForFixedUpdate();
         while ((rb.position - targetPos).sqrMagnitude > 0.0001f) {
             float dt = Time.fixedDeltaTime;
-            float targetSpeed = moveDir * baseSpeed * speedMultiplier;
+
+            float effectiveBaseSpeed = Mathf.Clamp(currentRunSpeed, runSpeedMin, runSpeedMax);
+            float speedWithApex = effectiveBaseSpeed * speedMultiplier * apexSpeedMultNow;
+            float targetSpeed = moveDir * speedWithApex;
 
             if (moveDir != 0) {
                 currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accel * dt);
@@ -682,6 +795,9 @@ public class Player2DController : MonoBehaviour {
             fallTimer = 0f;
             fallContext = FallRampContext.FromDash;
         }
+
+        // <<< NUEVO: restaurar colisiones con OneWay ignoradas durante dash ascendente
+        RestoreIgnoredOneWaysAfterDash();
 
         isDashing = false;
     }
@@ -725,8 +841,112 @@ public class Player2DController : MonoBehaviour {
         dashAwaitGround[idx] = false;
         dashCooldownLeft[idx] = dashCooldown;
     }
-
     #endregion
+
+    // === Apex helpers ===
+    private void UpdateApexMultipliers() {
+        float vy = rb.velocity.y;
+        float thr = Mathf.Max(0.0001f, apexVyThreshold);
+
+        float nearApex01 = 1f - Mathf.Clamp01(Mathf.Abs(vy) / thr);
+
+        apexSpeedMultNow = Mathf.Lerp(1f, Mathf.Max(1f, apexBonusSpeedMultiplier), nearApex01);
+        apexAccelMultNow = Mathf.Lerp(1f, Mathf.Max(1f, apexBonusAccelMultiplier), nearApex01);
+    }
+
+    // === Ground run speed gain/decay ===
+    private void UpdateGroundRunSpeed(float dt) {
+        bool hasInput = (moveDir != 0);
+
+        if (isGrounded && hasInput) {
+            currentRunSpeed = Mathf.MoveTowards(currentRunSpeed, runSpeedMax, runGainPerSecond * dt);
+        }
+        else {
+            currentRunSpeed = Mathf.MoveTowards(currentRunSpeed, runSpeedMin, runDecayPerSecond * dt);
+        }
+    }
+
+    // === One-way helpers ===
+    private bool IsOneWayPlatform(Collider2D c) {
+        if (c == null) return false;
+
+        // por capa
+        if ((oneWayMask.value & (1 << c.gameObject.layer)) != 0) return true;
+
+        // por tag
+        if (!string.IsNullOrEmpty(oneWayTag) && c.CompareTag(oneWayTag)) return true;
+
+        // por componente PlatformEffector2D
+        if (c.GetComponent<PlatformEffector2D>() != null) return true;
+        if (c.GetComponentInParent<PlatformEffector2D>() != null) return true;
+
+        return false;
+    }
+
+    // Ignora temporalmente las OneWay en la trayectoria del dash ascendente
+    private void PrepareUpwardDashIgnoreOneWays(Vector2 dir, float distance) {
+        tempIgnoredOneWays.Clear();
+        // Sólo buscamos en las capas marcadas como one-way para evitar ignorar otras cosas.
+        if (oneWayMask.value == 0) return;
+
+        ContactFilter2D filter = new ContactFilter2D();
+        filter.useTriggers = false;
+        filter.useLayerMask = true;
+        filter.SetLayerMask(oneWayMask);
+
+        RaycastHit2D[] hits = new RaycastHit2D[16];
+        int count = col.Cast(dir, filter, hits, distance);
+        for (int i = 0; i < count; i++) {
+            var c = hits[i].collider;
+            if (c == null) continue;
+            if (!IsOneWayPlatform(c)) continue;
+
+            // Evita doble agregado
+            if (!tempIgnoredOneWays.Contains(c)) {
+                Physics2D.IgnoreCollision(col, c, true);
+                tempIgnoredOneWays.Add(c);
+            }
+        }
+    }
+
+    private void RestoreIgnoredOneWaysAfterDash() {
+        for (int i = 0; i < tempIgnoredOneWays.Count; i++) {
+            var c = tempIgnoredOneWays[i];
+            if (c != null) Physics2D.IgnoreCollision(col, c, false);
+        }
+        tempIgnoredOneWays.Clear();
+    }
+
+    private IEnumerator DropThroughRoutine(Collider2D platform, float duration) {
+        if (platform == null) yield break;
+
+        // Activamos modo drop-through
+        dropThroughActive = true;
+        dropThroughCollider = platform;
+        dropThroughTimer = duration;
+
+        // Ignoramos colisión con esa plataforma por un rato
+        Physics2D.IgnoreCollision(col, platform, true);
+
+        // Forzamos salir del estado de suelo y empujón leve hacia abajo
+        isGrounded = false;
+        rb.velocity = new Vector2(rb.velocity.x, Mathf.Min(rb.velocity.y, -0.1f));
+
+        // Espera duración
+        float t = 0f;
+        while (t < duration) {
+            t += Time.deltaTime;
+            yield return null;
+        }
+
+        // Rehabilitamos la colisión
+        Physics2D.IgnoreCollision(col, platform, false);
+
+        // Pequeña tolerancia para que el raycast no la detecte inmediatamente
+        dropThroughTimer = 0.05f;
+        dropThroughActive = true;
+        dropThroughCollider = platform;
+    }
 
     private void OnDrawGizmosSelected() {
         if (!drawGizmos) return;
@@ -767,3 +987,4 @@ public class Player2DController : MonoBehaviour {
         }
     }
 }
+
