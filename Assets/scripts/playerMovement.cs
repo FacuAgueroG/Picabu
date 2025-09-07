@@ -2,19 +2,20 @@
 using System.Collections;
 
 [RequireComponent(typeof(Rigidbody2D))]
+[RequireComponent(typeof(Collider2D))]
 public class Player2DController : MonoBehaviour {
     [Header("Movement")]
     [SerializeField] private float baseSpeed = 6f;
     [SerializeField] private float speedMultiplier = 1f;
-    [SerializeField] private float accel = 999f;                  // aceleración/freno duro (suelo o con input)
+    [SerializeField] private float accel = 999f;
     [SerializeField] private bool faceRightDefault = true;
-    [SerializeField] private float airDrag = 5f;                  // resistencia horizontal en aire SIN input
+    [SerializeField] private float airDrag = 5f;
 
     [Header("Mario-style Gravity")]
     [SerializeField] private float fallGravityMultiplier = 2.5f;
     [SerializeField] private float riseGravityMultiplier = 1.0f;
-    [SerializeField] private float fallRampTimeJump = 0.15f;      // ramp al caer tras saltos
-    [SerializeField] private float fallRampTimeDash = 0.15f;      // ramp al caer tras dashes
+    [SerializeField] private float fallRampTimeJump = 0.15f;
+    [SerializeField] private float fallRampTimeDash = 0.15f;
 
     [Header("Jump (Press-to-Jump + Hold-to-Height)")]
     [SerializeField] private float jumpMinForce = 6f;
@@ -26,13 +27,21 @@ public class Player2DController : MonoBehaviour {
     [SerializeField] private float coyoteTime = 0.12f;
     [SerializeField] private float jumpBufferTime = 0.12f;
 
-    [Header("Dash (restricciones + 8 direcciones en aire)")]
+    [Header("Dash (8-dir en aire, horizontal en suelo)")]
     [SerializeField] private KeyCode dashKey = KeyCode.LeftShift;
     [SerializeField] private float dashSpeed = 20f;
     [SerializeField] private float dashDistance = 6f;
     [SerializeField] private int dashMaxCharges = 2;
     [SerializeField] private float dashCooldown = 1.25f;
-    [SerializeField] private float dashBufferTime = 0.12f;        // <<< NUEVO: buffer para dash
+    [SerializeField] private float dashBufferTime = 0.12f;
+
+    [Header("Downward Dash / Slam")]
+    [SerializeField] private bool allowDownwardDash = true;
+    [SerializeField] private bool slamOnDownwardDash = true;
+    [SerializeField] private float slamFallMultiplier = 6f;
+
+    [Header("Dash Wall Safety")]
+    [SerializeField] private float dashWallSafeDistance = 0.05f;
 
     [Header("Ground Check (Raycast, dual)")]
     [SerializeField] private Vector2 groundRayOffsetLeft = new Vector2(-0.4f, -0.5f);
@@ -41,6 +50,26 @@ public class Player2DController : MonoBehaviour {
     [SerializeField] private LayerMask groundMask;
     [SerializeField] private string groundTag = "Ground";
 
+    [Header("Wall Check (dual por lado)")]
+    [SerializeField] private Vector2 wallLeftOffsetA = new Vector2(-0.5f, 0.2f);
+    [SerializeField] private Vector2 wallLeftOffsetB = new Vector2(-0.5f, -0.2f);
+    [SerializeField] private Vector2 wallRightOffsetA = new Vector2(0.5f, 0.2f);
+    [SerializeField] private Vector2 wallRightOffsetB = new Vector2(0.5f, -0.2f);
+    [SerializeField] private float wallRayLength = 0.12f;
+    [SerializeField] private float wallSkinPush = 0.02f;
+
+    [Header("Wall Grab / Slide / Jump")]
+    [SerializeField] private bool enableWallGrab = true;
+    [SerializeField] private float wallGrabHoldTime = 0.2f;
+    [SerializeField] private float wallSlideGravityMultiplier = 0.6f;
+    [SerializeField] private float wallRegrabCooldown = 0.15f;
+    [SerializeField] private float wallJumpHorizontalForce = 8f;   // (se mantiene para compatibilidad)
+    [SerializeField] private float wallJumpVerticalForce = 10f;  // (se mantiene para compatibilidad)
+    [SerializeField] private float wallJumpOppositeMultiplier = 1.3f;
+    [SerializeField] private float wallJumpHorizontalLaunchSpeed = 10f; // <<< NUEVO: velocidad X de lanzamiento
+    [SerializeField] private float wallJumpLockTime = 0.12f;            // <<< NUEVO: tiempo de bloqueo de control horario
+    [SerializeField] private bool wallCountsAsGroundForDash = true;
+
     [Header("Sprite Flip")]
     [SerializeField] private Transform spriteChild;
 
@@ -48,48 +77,62 @@ public class Player2DController : MonoBehaviour {
     [SerializeField] private bool drawGizmos = true;
 
     private Rigidbody2D rb;
+    private Collider2D col;
     private float currentVelX;
     private int moveDir = 0;
     private int lastPressedDir = 0;
     private bool facingRight;
 
-    // Ground & jump state
+    // Ground & jump
     private bool isGrounded = false;
     private bool canDoubleJump = false;
 
-    // Jump hold system
+    // Jump hold
     private bool isJumpingHoldPhase = false;
     private bool jumpHeld = false;
     private float jumpHoldTimer = 0f;
     private float jumpExtraImpulseLeft = 0f;
     private float jumpExtraImpulsePerSec = 0f;
 
-    // Dash state
+    // Dash
     private bool isDashing = false;
     private Vector2 dashDir = Vector2.zero;
 
-    // Dash charges (independientes)
+    // Dash charges
     private float[] dashCooldownLeft;
     private bool[] dashReady;
     private bool[] dashAwaitGround;
 
-    // Fall ramp
+    // Fall / slam
     private float fallTimer = 0f;
     private bool wasFalling = false;
+    private bool isSlamming = false;
 
     // Coyote & buffers
     private float coyoteTimer = 0f;
     private float jumpBufferTimer = 0f;
-    private float dashBufferTimer = 0f;     // <<< NUEVO: temporizador de buffer de dash
+    private float dashBufferTimer = 0f;
+
+    // Wall states
+    private enum WallSide { None, Left, Right }
+    private WallSide wallSide = WallSide.None;
+    private bool isOnWall = false;
+    private bool isWallGrabbing = false;
+    private bool isWallSliding = false;
+    private float wallGrabTimer = 0f;
+    private float wallRegrabTimer = 0f;
+
+    // Wall-jump lock
+    private float wallJumpLockTimer = 0f; // <<< NUEVO
 
     private enum FallRampContext { None, FromJump, FromDash }
     private FallRampContext fallContext = FallRampContext.None;
 
-    // Flag de prioridad: si este frame ejecutamos salto, no disparamos buffer de dash en el mismo frame
     private bool executedJumpThisFrame = false;
 
     private void Awake() {
         rb = GetComponent<Rigidbody2D>();
+        col = GetComponent<Collider2D>();
         rb.gravityScale = Mathf.Max(0.1f, rb.gravityScale);
         facingRight = faceRightDefault;
 
@@ -105,21 +148,25 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void Update() {
-        executedJumpThisFrame = false; // reset por frame
+        executedJumpThisFrame = false;
 
         ReadHorizontalInput();
         HandleFacing();
 
-        // Ground check + coyote
+        // Ground check + coyote + fin de slam al pisar
         isGrounded = CheckGrounded();
         if (isGrounded) {
             canDoubleJump = true;
             coyoteTimer = coyoteTime;
             fallContext = FallRampContext.None;
+            isSlamming = false;
         }
         else if (coyoteTimer > 0f) {
             coyoteTimer -= Time.deltaTime;
         }
+
+        // Wall check / estados
+        UpdateWallDetectionAndStates(Time.deltaTime);
 
         // Inputs salto
         bool jumpDown = Input.GetKeyDown(jumpKey);
@@ -130,52 +177,69 @@ public class Player2DController : MonoBehaviour {
         if (jumpDown) jumpBufferTimer = jumpBufferTime;
         else if (jumpBufferTimer > 0f) jumpBufferTimer -= Time.deltaTime;
 
+        // Saltos (incluye wall-jump con lock)
         HandleJumpInput_ImmediatePressHold(jumpDown, jumpUp);
 
-        // Input de dash: intento inmediato; si no se puede, guardo buffer
+        // Dash + buffer (prioridad salto)
         if (Input.GetKeyDown(dashKey)) {
-            bool fired = TryDashNow();                // intenta disparar YA
-            if (!fired) dashBufferTimer = dashBufferTime; // si no pudo, guarda buffer
+            bool fired = TryDashNow();      // valida distancia con cast
+            if (!fired) dashBufferTimer = dashBufferTime;
         }
         else if (dashBufferTimer > 0f) {
             dashBufferTimer -= Time.deltaTime;
             if (dashBufferTimer > 0f && !executedJumpThisFrame) {
-                // Reintenta mientras dure el buffer, con prioridad al salto si ocurrió este frame
                 TryDashNow();
             }
         }
 
-        // Cargas de dash (cd corre en aire; se habilitan al tocar suelo)
-        UpdateDashCharges(Time.deltaTime, isGrounded);
+        // Cargas de dash: "ground-like" si en pared y permitido
+        bool groundLike = isGrounded || (isOnWall && wallCountsAsGroundForDash);
+        UpdateDashCharges(Time.deltaTime, groundLike);
+
+        // Tick del lock de wall-jump
+        if (wallJumpLockTimer > 0f) wallJumpLockTimer -= Time.deltaTime;
     }
     private void FixedUpdate() {
-        if (isDashing) return; // el RB se mueve desde la corrutina, pero seguimos “simulando” X allí
+        if (isDashing) return; // el dash mueve por corrutina
 
         float dt = Time.fixedDeltaTime;
         float targetSpeed = moveDir * baseSpeed * speedMultiplier;
 
-        // Movimiento X con drag en aire SIN input
-        if (isGrounded || moveDir != 0) {
+        // === Horizontal ===
+        if (wallJumpLockTimer > 0f) {
+            // Durante el lock, conservamos la velocidad horizontal de lanzamiento
+            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+        }
+        else if (isGrounded || moveDir != 0) {
             currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accel * dt);
+            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
         }
         else {
             currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
+            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
         }
 
-        rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+        // WallGrab: si estás pegado (y no deslizando), inmoviliza por completo
+        if (isWallGrabbing && !isWallSliding) {
+            rb.velocity = Vector2.zero;
+        }
 
         ApplyJumpHoldBoostInFixed();
         ApplyMarioStyleGravities();
     }
 
     #region Input & Facing
-
     private void ReadHorizontalInput() {
         bool leftHeld = Input.GetKey(KeyCode.A);
         bool rightHeld = Input.GetKey(KeyCode.D);
 
         if (Input.GetKeyDown(KeyCode.A)) lastPressedDir = -1;
         if (Input.GetKeyDown(KeyCode.D)) lastPressedDir = 1;
+
+        if (wallJumpLockTimer > 0f) {
+            // Ignorar cambios de input durante el lock (no tocamos moveDir)
+            return;
+        }
 
         if (leftHeld && rightHeld) {
             moveDir = lastPressedDir;
@@ -192,7 +256,7 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void HandleFacing() {
-        if (moveDir != 0) {
+        if (moveDir != 0 && wallJumpLockTimer <= 0f) {
             bool shouldFaceRight = moveDir > 0;
             if (shouldFaceRight != facingRight) {
                 facingRight = shouldFaceRight;
@@ -208,11 +272,9 @@ public class Player2DController : MonoBehaviour {
             spriteChild.localScale = s;
         }
     }
-
     #endregion
 
-    #region Ground Check (dual raycasts)
-
+    #region Ground & Wall Checks
     private bool CheckGrounded() {
         return CheckGroundRayAt(groundRayOffsetLeft) || CheckGroundRayAt(groundRayOffsetRight);
     }
@@ -229,14 +291,99 @@ public class Player2DController : MonoBehaviour {
         return false;
     }
 
+    private void UpdateWallDetectionAndStates(float dt) {
+        if (!enableWallGrab) {
+            isOnWall = isWallGrabbing = isWallSliding = false;
+            wallSide = WallSide.None;
+            if (wallRegrabTimer > 0f) wallRegrabTimer -= dt;
+            return;
+        }
+
+        bool left = CastWallAt(wallLeftOffsetA, Vector2.left) || CastWallAt(wallLeftOffsetB, Vector2.left);
+        bool right = CastWallAt(wallRightOffsetA, Vector2.right) || CastWallAt(wallRightOffsetB, Vector2.right);
+
+        WallSide newSide = WallSide.None;
+        if (left && !right) newSide = WallSide.Left;
+        else if (right && !left) newSide = WallSide.Right;
+        else if (left && right) newSide = (lastPressedDir >= 0) ? WallSide.Right : WallSide.Left;
+
+        bool wasOnWall = isOnWall;
+        WallSide prevSide = wallSide;
+
+        isOnWall = (newSide != WallSide.None) && !isGrounded;
+        wallSide = isOnWall ? newSide : WallSide.None;
+
+        if (wallRegrabTimer > 0f) wallRegrabTimer -= dt;
+
+        if (isOnWall) {
+            if (!wasOnWall || (prevSide != wallSide)) {
+                if (wallRegrabTimer <= 0f) {
+                    EnterWallGrab();
+                }
+            }
+
+            if (isWallGrabbing && !isWallSliding) {
+                wallGrabTimer += dt;
+                if (wallGrabTimer >= wallGrabHoldTime) {
+                    EnterWallSlide();
+                }
+            }
+        }
+        else {
+            if (wasOnWall) {
+                ExitWallStates();
+                wallRegrabTimer = wallRegrabCooldown;
+            }
+        }
+    }
+
+    private bool CastWallAt(Vector2 localOffset, Vector2 dir) {
+        Vector2 origin = (Vector2)transform.position + localOffset;
+        RaycastHit2D hit = Physics2D.Raycast(origin, dir, wallRayLength, groundMask);
+        if (hit.collider != null) return true;
+
+        RaycastHit2D hitNoMask = Physics2D.Raycast(origin, dir, wallRayLength);
+        return (hitNoMask.collider != null && hitNoMask.collider.CompareTag(groundTag));
+    }
+
+    private void EnterWallGrab() {
+        isWallGrabbing = true;
+        isWallSliding = false;
+        wallGrabTimer = 0f;
+        isSlamming = false;
+
+        float push = wallSkinPush;
+        if (wallSide == WallSide.Left) transform.position += new Vector3(+push, 0f, 0f);
+        if (wallSide == WallSide.Right) transform.position += new Vector3(-push, 0f, 0f);
+
+        canDoubleJump = true;
+    }
+
+    private void EnterWallSlide() {
+        isWallGrabbing = false;
+        isWallSliding = true;
+    }
+
+    private void ExitWallStates() {
+        isWallGrabbing = false;
+        isWallSliding = false;
+        wallGrabTimer = 0f;
+        wallSide = WallSide.None;
+    }
     #endregion
 
-    #region Jump (Immediate press + hold + Coyote + Buffer)
-
+    #region Jump (Immediate + Hold + Coyote + Buffer + Wall Jump con lock)
     private void HandleJumpInput_ImmediatePressHold(bool jumpDown, bool jumpUp) {
+        // Wall-jump tiene prioridad si estamos en pared
+        if ((isWallGrabbing || isWallSliding) && (jumpDown || (jumpBufferTimer > 0f))) {
+            DoWallJump();
+            jumpBufferTimer = 0f;
+            executedJumpThisFrame = true;
+            return;
+        }
+
         bool canGroundLikeJumpNow = isGrounded || (coyoteTimer > 0f);
 
-        // 1) Consumir buffer si se puede saltar “como suelo”
         if (jumpBufferTimer > 0f && canGroundLikeJumpNow) {
             DoGroundLikeJump();
             jumpBufferTimer = 0f;
@@ -244,7 +391,6 @@ public class Player2DController : MonoBehaviour {
             return;
         }
 
-        // 2) Pulsación directa
         if (jumpDown) {
             if (canGroundLikeJumpNow) {
                 jumpBufferTimer = 0f;
@@ -252,8 +398,6 @@ public class Player2DController : MonoBehaviour {
                 executedJumpThisFrame = true;
                 return;
             }
-
-            // Doble salto (requiere pulsación directa)
             if (!isGrounded && canDoubleJump) {
                 DoDoubleJump();
                 executedJumpThisFrame = true;
@@ -261,7 +405,6 @@ public class Player2DController : MonoBehaviour {
             }
         }
 
-        // 3) Soltar tecla corta el hold
         if (jumpUp) {
             isJumpingHoldPhase = false;
         }
@@ -271,6 +414,9 @@ public class Player2DController : MonoBehaviour {
         rb.velocity = new Vector2(rb.velocity.x, 0f);
         wasFalling = false;
         fallTimer = 0f;
+        isSlamming = false;
+        ExitWallStates();
+        wallJumpLockTimer = 0f;
         fallContext = FallRampContext.FromJump;
 
         float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
@@ -291,6 +437,9 @@ public class Player2DController : MonoBehaviour {
         canDoubleJump = false;
         wasFalling = false;
         fallTimer = 0f;
+        isSlamming = false;
+        ExitWallStates();
+        wallJumpLockTimer = 0f;
         fallContext = FallRampContext.FromJump;
 
         float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
@@ -306,9 +455,50 @@ public class Player2DController : MonoBehaviour {
         jumpHoldTimer = 0f;
     }
 
+    private void DoWallJump() {
+        // Siempre alejándose de la pared
+        int away = (wallSide == WallSide.Right) ? -1 : +1;
+
+        // Bonus si el jugador mantiene input opuesto
+        bool inputOpposite = (away < 0 && Input.GetKey(KeyCode.A)) || (away > 0 && Input.GetKey(KeyCode.D));
+        float launchX = wallJumpHorizontalLaunchSpeed * (inputOpposite ? wallJumpOppositeMultiplier : 1f);
+
+        // Reset estados
+        rb.velocity = Vector2.zero;
+        ExitWallStates();
+        wasFalling = false;
+        fallTimer = 0f;
+        isSlamming = false;
+        fallContext = FallRampContext.FromJump;
+
+        // Lanzamiento: fijamos X directa + impulso vertical
+        currentVelX = away * launchX;                   // <<< clave: sincroniza con el sistema de movimiento
+        rb.velocity = new Vector2(currentVelX, 0f);
+        rb.AddForce(Vector2.up * wallJumpVerticalForce, ForceMode2D.Impulse);
+
+        // Arranca fase de hold (como un salto normal)
+        float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
+        float extraTotal = Mathf.Max(0f, (jumpMaxForce - jumpMinForce) * riseScale);
+        jumpExtraImpulseLeft = extraTotal;
+        jumpExtraImpulsePerSec = (jumpMaxChargeTime > 0f) ? (extraTotal / jumpMaxChargeTime) : (extraTotal / Mathf.Epsilon);
+        isJumpingHoldPhase = true;
+        jumpHoldTimer = 0f;
+
+        // Lock de control horizontal para que no lo cancelen ni el input ni el drag
+        wallJumpLockTimer = Mathf.Max(0f, wallJumpLockTime);
+
+        // Anti re-enganche inmediato
+        wallRegrabTimer = wallRegrabCooldown;
+
+        // Opcional: orientar sprite hacia el movimiento si querés
+        if ((away > 0 && !facingRight) || (away < 0 && facingRight)) {
+            facingRight = !facingRight;
+            FlipSprite();
+        }
+    }
+
     private void ApplyJumpHoldBoostInFixed() {
         if (!isJumpingHoldPhase) return;
-
         if (!jumpHeld || jumpHoldTimer >= jumpMaxChargeTime || jumpExtraImpulseLeft <= 0f || rb.velocity.y <= 0f) {
             isJumpingHoldPhase = false;
             return;
@@ -329,6 +519,18 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void ApplyMarioStyleGravities() {
+        if (isSlamming) {
+            float multiplier = fallGravityMultiplier * Mathf.Max(0f, slamFallMultiplier);
+            rb.velocity += Vector2.up * Physics2D.gravity.y * (multiplier) * Time.fixedDeltaTime;
+            return;
+        }
+
+        if (isWallSliding) {
+            float mult = Mathf.Max(0f, wallSlideGravityMultiplier);
+            rb.velocity += Vector2.up * Physics2D.gravity.y * mult * Time.fixedDeltaTime;
+            return;
+        }
+
         if (rb.velocity.y < 0f) {
             if (!wasFalling) {
                 wasFalling = true;
@@ -343,21 +545,46 @@ public class Player2DController : MonoBehaviour {
             float t = (activeRamp > 0f) ? Mathf.Clamp01(fallTimer / activeRamp) : 1f;
             float currentMultiplier = Mathf.Lerp(1f, fallGravityMultiplier, t);
 
-            rb.velocity += Vector2.up * Physics2D.gravity.y * (currentMultiplier - 1f) * Time.fixedDeltaTime;
+            rb.velocity += Vector2.up * Physics2D.gravity.y * (currentMultiplier) * Time.fixedDeltaTime;
         }
         else {
             wasFalling = false;
 
             if (rb.velocity.y > 0f) {
-                rb.velocity += Vector2.up * Physics2D.gravity.y * (riseGravityMultiplier - 1f) * Time.fixedDeltaTime;
+                rb.velocity += Vector2.up * Physics2D.gravity.y * (riseGravityMultiplier) * Time.fixedDeltaTime;
             }
         }
     }
-
     #endregion
-    #region Dash (8-way en aire, horizontal estricto en suelo, cargas independientes, buffer, drag persistente)
+    #region Dash (cast + skin), charges, gizmos
 
-    // Intenta disparar el dash ahora; devuelve true si lo ejecutó
+    private float ComputeDashAllowedDistance(Vector2 dir) {
+        if (dir.sqrMagnitude <= 0f) return 0f;
+
+        ContactFilter2D filter = new ContactFilter2D();
+        filter.useTriggers = false;
+        filter.SetLayerMask(groundMask);
+        filter.useLayerMask = true;
+
+        float maxCheck = Mathf.Max(0f, dashDistance + dashWallSafeDistance);
+        RaycastHit2D[] hits = new RaycastHit2D[8];
+        int count = col.Cast(dir, filter, hits, maxCheck);
+
+        float minHitDist = maxCheck;
+        for (int i = 0; i < count; i++) {
+            if (hits[i].collider == null) continue;
+            if (hits[i].distance < minHitDist) {
+                minHitDist = hits[i].distance;
+            }
+        }
+
+        float allowed = (count > 0)
+            ? Mathf.Clamp(minHitDist - dashWallSafeDistance, 0f, dashDistance)
+            : dashDistance;
+
+        return allowed;
+    }
+
     private bool TryDashNow() {
         if (isDashing) return false;
 
@@ -367,7 +594,6 @@ public class Player2DController : MonoBehaviour {
         Vector2 dir;
 
         if (isGrounded) {
-            // En suelo: SOLO A o D (sin W/S, sin A+D, sin vacío)
             bool left = Input.GetKey(KeyCode.A);
             bool right = Input.GetKey(KeyCode.D);
             bool up = Input.GetKey(KeyCode.W);
@@ -380,7 +606,6 @@ public class Player2DController : MonoBehaviour {
             dir = new Vector2(hx, 0f);
         }
         else {
-            // En aire: 8 direcciones
             int x = 0, y = 0;
             if (Input.GetKey(KeyCode.D)) x = 1;
             if (Input.GetKey(KeyCode.A)) x = -1;
@@ -394,30 +619,38 @@ public class Player2DController : MonoBehaviour {
             else {
                 dir = dir.normalized;
             }
+
+            if (!allowDownwardDash && dir.y < 0f) return false;
+        }
+
+        float allowedDistance = ComputeDashAllowedDistance(dir);
+        if (allowedDistance <= 0.0001f) {
+            return false; // pegado a pared o sin espacio: NO consume carga
         }
 
         ConsumeDashCharge(readyIdx);
-        StartCoroutine(DashRoutine(dir));
+        StartCoroutine(DashRoutine(dir, allowedDistance));
         return true;
     }
 
-    private IEnumerator DashRoutine(Vector2 dir) {
+    private IEnumerator DashRoutine(Vector2 dir, float allowedDistance) {
         isDashing = true;
         dashDir = dir;
+        isSlamming = false;
+        ExitWallStates();
 
         float originalGravity = rb.gravityScale;
         rb.gravityScale = 0f;
         Vector2 originalVel = rb.velocity;
         rb.velocity = Vector2.zero;
 
-        Vector2 targetPos = rb.position + dashDir * dashDistance;
+        Vector2 targetPos = rb.position + dashDir * allowedDistance;
 
-        // Mientras dashing: seguir “simulando” currentVelX según input/drag (para que se recuerde al salir)
         WaitForFixedUpdate wait = new WaitForFixedUpdate();
         while ((rb.position - targetPos).sqrMagnitude > 0.0001f) {
-            // Simular X: si hay input, tender a target; si no, drag hacia 0 (como en FixedUpdate)
             float dt = Time.fixedDeltaTime;
             float targetSpeed = moveDir * baseSpeed * speedMultiplier;
+
             if (moveDir != 0) {
                 currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accel * dt);
             }
@@ -425,7 +658,6 @@ public class Player2DController : MonoBehaviour {
                 currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
             }
 
-            // Mover el dash por distancia exacta
             float step = dashSpeed * Time.fixedDeltaTime;
             Vector2 nextPos = Vector2.MoveTowards(rb.position, targetPos, step);
             rb.MovePosition(nextPos);
@@ -433,19 +665,28 @@ public class Player2DController : MonoBehaviour {
             yield return wait;
         }
 
-        // Salida del dash: NO restaurar vel.x previa; usar la simulada (drag persistente)
         rb.gravityScale = originalGravity;
-        rb.velocity = new Vector2(currentVelX, 0f);
 
-        // Resetear estado de caída y marcar contexto “desde dash”
-        wasFalling = false;
-        fallTimer = 0f;
-        fallContext = FallRampContext.FromDash;
+        if (dashDir.y < 0f && slamOnDownwardDash) {
+            float startDownVel = -dashSpeed;
+            rb.velocity = new Vector2(currentVelX, startDownVel);
+
+            fallContext = FallRampContext.FromDash;
+            wasFalling = true;
+            fallTimer = 0f;
+            isSlamming = true;
+        }
+        else {
+            rb.velocity = new Vector2(currentVelX, 0f);
+            wasFalling = false;
+            fallTimer = 0f;
+            fallContext = FallRampContext.FromDash;
+        }
 
         isDashing = false;
     }
 
-    private void UpdateDashCharges(float dt, bool groundedNow) {
+    private void UpdateDashCharges(float dt, bool groundLikeNow) {
         int n = dashCooldownLeft.Length;
         for (int i = 0; i < n; i++) {
             if (dashReady[i]) continue;
@@ -454,17 +695,17 @@ public class Player2DController : MonoBehaviour {
                 dashCooldownLeft[i] -= dt;
                 if (dashCooldownLeft[i] <= 0f) {
                     dashCooldownLeft[i] = 0f;
-                    if (groundedNow) {
+                    if (groundLikeNow) {
                         dashReady[i] = true;
                         dashAwaitGround[i] = false;
                     }
                     else {
-                        dashAwaitGround[i] = true; // terminó tiempo, espera tocar suelo
+                        dashAwaitGround[i] = true;
                     }
                 }
             }
             else {
-                if (dashAwaitGround[i] && groundedNow) {
+                if (dashAwaitGround[i] && groundLikeNow) {
                     dashReady[i] = true;
                     dashAwaitGround[i] = false;
                 }
@@ -491,10 +732,23 @@ public class Player2DController : MonoBehaviour {
         if (!drawGizmos) return;
         Gizmos.color = Color.green;
 
+        // Suelo
         Vector2 originL = (Vector2)transform.position + groundRayOffsetLeft;
         Vector2 originR = (Vector2)transform.position + groundRayOffsetRight;
         Gizmos.DrawLine(originL, originL + Vector2.down * groundRayLength);
         Gizmos.DrawLine(originR, originR + Vector2.down * groundRayLength);
+
+        // Pared izquierda
+        Vector2 wlA = (Vector2)transform.position + wallLeftOffsetA;
+        Vector2 wlB = (Vector2)transform.position + wallLeftOffsetB;
+        Gizmos.DrawLine(wlA, wlA + Vector2.left * wallRayLength);
+        Gizmos.DrawLine(wlB, wlB + Vector2.left * wallRayLength);
+
+        // Pared derecha
+        Vector2 wrA = (Vector2)transform.position + wallRightOffsetA;
+        Vector2 wrB = (Vector2)transform.position + wallRightOffsetB;
+        Gizmos.DrawLine(wrA, wrA + Vector2.right * wallRayLength);
+        Gizmos.DrawLine(wrB, wrB + Vector2.right * wallRayLength);
     }
 
     // API pública
