@@ -6,15 +6,15 @@ public class Player2DController : MonoBehaviour {
     [Header("Movement")]
     [SerializeField] private float baseSpeed = 6f;
     [SerializeField] private float speedMultiplier = 1f;
-    [SerializeField] private float accel = 999f;                  // aceleración/freno “duro” (suelo / con input)
+    [SerializeField] private float accel = 999f;                  // aceleración/freno duro (suelo o con input)
     [SerializeField] private bool faceRightDefault = true;
-    [SerializeField] private float airDrag = 5f;                  // <<< resistencia horizontal en el aire (sin input)
+    [SerializeField] private float airDrag = 5f;                  // resistencia horizontal en aire SIN input
 
     [Header("Mario-style Gravity")]
     [SerializeField] private float fallGravityMultiplier = 2.5f;
     [SerializeField] private float riseGravityMultiplier = 1.0f;
-    [SerializeField] private float fallRampTimeJump = 0.15f;
-    [SerializeField] private float fallRampTimeDash = 0.15f;
+    [SerializeField] private float fallRampTimeJump = 0.15f;      // ramp al caer tras saltos
+    [SerializeField] private float fallRampTimeDash = 0.15f;      // ramp al caer tras dashes
 
     [Header("Jump (Press-to-Jump + Hold-to-Height)")]
     [SerializeField] private float jumpMinForce = 6f;
@@ -26,19 +26,20 @@ public class Player2DController : MonoBehaviour {
     [SerializeField] private float coyoteTime = 0.12f;
     [SerializeField] private float jumpBufferTime = 0.12f;
 
-    [Header("Ground Check (Raycast, dual)")]
-    [SerializeField] private Vector2 groundRayOffsetLeft = new Vector2(-0.4f, -0.5f);
-    [SerializeField] private Vector2 groundRayOffsetRight = new Vector2(0.4f, -0.5f);
-    [SerializeField] private float groundRayLength = 0.2f;
-    [SerializeField] private LayerMask groundMask;
-    [SerializeField] private string groundTag = "Ground";
-
     [Header("Dash (restricciones + 8 direcciones en aire)")]
     [SerializeField] private KeyCode dashKey = KeyCode.LeftShift;
     [SerializeField] private float dashSpeed = 20f;
     [SerializeField] private float dashDistance = 6f;
     [SerializeField] private int dashMaxCharges = 2;
     [SerializeField] private float dashCooldown = 1.25f;
+    [SerializeField] private float dashBufferTime = 0.12f;        // <<< NUEVO: buffer para dash
+
+    [Header("Ground Check (Raycast, dual)")]
+    [SerializeField] private Vector2 groundRayOffsetLeft = new Vector2(-0.4f, -0.5f);
+    [SerializeField] private Vector2 groundRayOffsetRight = new Vector2(0.4f, -0.5f);
+    [SerializeField] private float groundRayLength = 0.2f;
+    [SerializeField] private LayerMask groundMask;
+    [SerializeField] private string groundTag = "Ground";
 
     [Header("Sprite Flip")]
     [SerializeField] private Transform spriteChild;
@@ -63,11 +64,11 @@ public class Player2DController : MonoBehaviour {
     private float jumpExtraImpulseLeft = 0f;
     private float jumpExtraImpulsePerSec = 0f;
 
-    // Dash
+    // Dash state
     private bool isDashing = false;
     private Vector2 dashDir = Vector2.zero;
 
-    // Dash charges
+    // Dash charges (independientes)
     private float[] dashCooldownLeft;
     private bool[] dashReady;
     private bool[] dashAwaitGround;
@@ -76,12 +77,16 @@ public class Player2DController : MonoBehaviour {
     private float fallTimer = 0f;
     private bool wasFalling = false;
 
-    // Coyote & buffer
+    // Coyote & buffers
     private float coyoteTimer = 0f;
     private float jumpBufferTimer = 0f;
+    private float dashBufferTimer = 0f;     // <<< NUEVO: temporizador de buffer de dash
 
     private enum FallRampContext { None, FromJump, FromDash }
     private FallRampContext fallContext = FallRampContext.None;
+
+    // Flag de prioridad: si este frame ejecutamos salto, no disparamos buffer de dash en el mismo frame
+    private bool executedJumpThisFrame = false;
 
     private void Awake() {
         rb = GetComponent<Rigidbody2D>();
@@ -100,6 +105,8 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void Update() {
+        executedJumpThisFrame = false; // reset por frame
+
         ReadHorizontalInput();
         HandleFacing();
 
@@ -119,34 +126,43 @@ public class Player2DController : MonoBehaviour {
         bool jumpUp = Input.GetKeyUp(jumpKey);
         jumpHeld = Input.GetKey(jumpKey);
 
-        // Buffer
+        // Buffer de salto
         if (jumpDown) jumpBufferTimer = jumpBufferTime;
         else if (jumpBufferTimer > 0f) jumpBufferTimer -= Time.deltaTime;
 
         HandleJumpInput_ImmediatePressHold(jumpDown, jumpUp);
-        HandleDashInput();
 
+        // Input de dash: intento inmediato; si no se puede, guardo buffer
+        if (Input.GetKeyDown(dashKey)) {
+            bool fired = TryDashNow();                // intenta disparar YA
+            if (!fired) dashBufferTimer = dashBufferTime; // si no pudo, guarda buffer
+        }
+        else if (dashBufferTimer > 0f) {
+            dashBufferTimer -= Time.deltaTime;
+            if (dashBufferTimer > 0f && !executedJumpThisFrame) {
+                // Reintenta mientras dure el buffer, con prioridad al salto si ocurrió este frame
+                TryDashNow();
+            }
+        }
+
+        // Cargas de dash (cd corre en aire; se habilitan al tocar suelo)
         UpdateDashCharges(Time.deltaTime, isGrounded);
     }
-
     private void FixedUpdate() {
-        if (isDashing) return;
+        if (isDashing) return; // el RB se mueve desde la corrutina, pero seguimos “simulando” X allí
 
         float dt = Time.fixedDeltaTime;
         float targetSpeed = moveDir * baseSpeed * speedMultiplier;
 
-        // --- Movimiento X corregido para drag ---
+        // Movimiento X con drag en aire SIN input
         if (isGrounded || moveDir != 0) {
-            // En suelo (o en aire pero con input): usar aceleración “dura”
             currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accel * dt);
         }
         else {
-            // En aire y SIN input: aplicar drag hacia 0
             currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
         }
 
         rb.velocity = new Vector2(currentVelX, rb.velocity.y);
-        // ---------------------------------------
 
         ApplyJumpHoldBoostInFixed();
         ApplyMarioStyleGravities();
@@ -224,6 +240,7 @@ public class Player2DController : MonoBehaviour {
         if (jumpBufferTimer > 0f && canGroundLikeJumpNow) {
             DoGroundLikeJump();
             jumpBufferTimer = 0f;
+            executedJumpThisFrame = true;
             return;
         }
 
@@ -232,12 +249,14 @@ public class Player2DController : MonoBehaviour {
             if (canGroundLikeJumpNow) {
                 jumpBufferTimer = 0f;
                 DoGroundLikeJump();
+                executedJumpThisFrame = true;
                 return;
             }
 
             // Doble salto (requiere pulsación directa)
             if (!isGrounded && canDoubleJump) {
                 DoDoubleJump();
+                executedJumpThisFrame = true;
                 return;
             }
         }
@@ -336,15 +355,14 @@ public class Player2DController : MonoBehaviour {
     }
 
     #endregion
+    #region Dash (8-way en aire, horizontal estricto en suelo, cargas independientes, buffer, drag persistente)
 
-    #region Dash (8-way en aire, horizontal estricto en suelo, cargas independientes)
-
-    private void HandleDashInput() {
-        if (!Input.GetKeyDown(dashKey)) return;
-        if (isDashing) return;
+    // Intenta disparar el dash ahora; devuelve true si lo ejecutó
+    private bool TryDashNow() {
+        if (isDashing) return false;
 
         int readyIdx = GetReadyDashIndex();
-        if (readyIdx < 0) return; // no hay cargas listas
+        if (readyIdx < 0) return false;
 
         Vector2 dir;
 
@@ -355,8 +373,8 @@ public class Player2DController : MonoBehaviour {
             bool up = Input.GetKey(KeyCode.W);
             bool down = Input.GetKey(KeyCode.S);
 
-            if (up || down) return;
-            if (left == right) return;
+            if (up || down) return false;
+            if (left == right) return false;
 
             int hx = left ? -1 : 1;
             dir = new Vector2(hx, 0f);
@@ -380,6 +398,7 @@ public class Player2DController : MonoBehaviour {
 
         ConsumeDashCharge(readyIdx);
         StartCoroutine(DashRoutine(dir));
+        return true;
     }
 
     private IEnumerator DashRoutine(Vector2 dir) {
@@ -392,16 +411,33 @@ public class Player2DController : MonoBehaviour {
         rb.velocity = Vector2.zero;
 
         Vector2 targetPos = rb.position + dashDir * dashDistance;
+
+        // Mientras dashing: seguir “simulando” currentVelX según input/drag (para que se recuerde al salir)
+        WaitForFixedUpdate wait = new WaitForFixedUpdate();
         while ((rb.position - targetPos).sqrMagnitude > 0.0001f) {
+            // Simular X: si hay input, tender a target; si no, drag hacia 0 (como en FixedUpdate)
+            float dt = Time.fixedDeltaTime;
+            float targetSpeed = moveDir * baseSpeed * speedMultiplier;
+            if (moveDir != 0) {
+                currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accel * dt);
+            }
+            else {
+                currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
+            }
+
+            // Mover el dash por distancia exacta
             float step = dashSpeed * Time.fixedDeltaTime;
             Vector2 nextPos = Vector2.MoveTowards(rb.position, targetPos, step);
             rb.MovePosition(nextPos);
-            yield return new WaitForFixedUpdate();
+
+            yield return wait;
         }
 
+        // Salida del dash: NO restaurar vel.x previa; usar la simulada (drag persistente)
         rb.gravityScale = originalGravity;
-        rb.velocity = new Vector2(originalVel.x, 0f);
+        rb.velocity = new Vector2(currentVelX, 0f);
 
+        // Resetear estado de caída y marcar contexto “desde dash”
         wasFalling = false;
         fallTimer = 0f;
         fallContext = FallRampContext.FromDash;
@@ -423,7 +459,7 @@ public class Player2DController : MonoBehaviour {
                         dashAwaitGround[i] = false;
                     }
                     else {
-                        dashAwaitGround[i] = true;
+                        dashAwaitGround[i] = true; // terminó tiempo, espera tocar suelo
                     }
                 }
             }
