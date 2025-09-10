@@ -1,0 +1,1265 @@
+using UnityEngine;
+using System.Collections;
+using System.Collections.Generic;
+
+[RequireComponent(typeof(Rigidbody2D))]
+[RequireComponent(typeof(Collider2D))]
+public class playerMovementRefactorized : MonoBehaviour {
+    // ===========================
+    //           CONFIG
+    // ===========================
+
+    [Header("Movement")]
+    [SerializeField] private float baseSpeed = 6f;
+    [SerializeField] private float speedMultiplier = 1f;
+    [SerializeField] private float accel = 999f;
+    [SerializeField] private bool faceRightDefault = true;
+    [SerializeField] private float airDrag = 5f;
+
+    [Header("Mario-style Gravity")]
+    [SerializeField] private float fallGravityMultiplier = 2.5f;
+    [SerializeField] private float riseGravityMultiplier = 1.0f;
+    [SerializeField] private float fallRampTimeJump = 0.15f;
+    [SerializeField] private float fallRampTimeDash = 0.15f;
+
+    [Header("Jump (Press-to-Jump + Hold-to-Height)")]
+    [SerializeField] private float jumpMinForce = 6f;
+    [SerializeField] private float jumpMaxForce = 14f;
+    [SerializeField] private float jumpMaxChargeTime = 0.35f;
+    [SerializeField] private KeyCode jumpKey = KeyCode.Space;
+
+    [Header("Coyote Time & Jump Buffer")]
+    [SerializeField] private float coyoteTime = 0.12f;
+    [SerializeField] private float jumpBufferTime = 0.12f;
+
+    [Header("Dash (8-dir en aire, horizontal en suelo)")]
+    [SerializeField] private KeyCode dashKey = KeyCode.LeftShift;
+    [SerializeField] private float dashSpeed = 20f;
+    [SerializeField] private float dashDistance = 6f;
+    [SerializeField] private int dashMaxCharges = 2;
+    [SerializeField] private float dashCooldown = 1.25f;
+    [SerializeField] private float dashBufferTime = 0.12f;
+
+    [Header("Downward Dash / Hold-to-Ground")]
+    [SerializeField] private bool allowDownwardDash = true;
+    [Tooltip("Activa el dash infinito hacia abajo/diagonal hasta tocar suelo (reemplaza el 'slam').")]
+    [SerializeField] private bool slamOnDownwardDash = true;
+    [Tooltip("El dash descendente usa dashSpeed / divisor.")]
+    [SerializeField] private float downwardDashSpeedDivisor = 2f;
+    [Tooltip("Skin para parar antes de penetrar el suelo.")]
+    [SerializeField] private float downwardGroundStopSkin = 0.025f;
+    [Tooltip("Fuerza vertical del salto EXTRA al cancelar el downward dash (no es cargable).")]
+    [SerializeField] private float downwardCancelJumpForce = 9f;
+
+    [Header("Dash Wall Safety")]
+    [SerializeField] private float dashWallSafeDistance = 0.05f;
+
+    [Header("Ground Check (Raycast, dual)")]
+    [SerializeField] private Vector2 groundRayOffsetLeft = new Vector2(-0.4f, -0.5f);
+    [SerializeField] private Vector2 groundRayOffsetRight = new Vector2(0.4f, -0.5f);
+    [SerializeField] private float groundRayLength = 0.2f;
+    [SerializeField] private LayerMask groundMask;
+    [SerializeField] private string groundTag = "Ground";
+
+    [Header("Wall Check (dual por lado)")]
+    [SerializeField] private Vector2 wallLeftOffsetA = new Vector2(-0.5f, 0.2f);
+    [SerializeField] private Vector2 wallLeftOffsetB = new Vector2(-0.5f, -0.2f);
+    [SerializeField] private Vector2 wallRightOffsetA = new Vector2(0.5f, 0.2f);
+    [SerializeField] private Vector2 wallRightOffsetB = new Vector2(0.5f, -0.2f);
+    [SerializeField] private float wallRayLength = 0.12f;
+    [SerializeField] private float wallSkinPush = 0.02f;
+
+    [Header("Wall Grab / Slide / Jump")]
+    [SerializeField] private bool enableWallGrab = true;
+    [SerializeField] private float wallGrabHoldTime = 0.2f;
+    [SerializeField] private float wallSlideGravityMultiplier = 0.6f;
+    [SerializeField] private float wallRegrabCooldown = 0.15f;
+    [SerializeField] private float wallJumpHorizontalForce = 8f;   // (compat)
+    [SerializeField] private float wallJumpVerticalForce = 10f;    // (compat)
+    [SerializeField] private float wallJumpOppositeMultiplier = 1.3f;
+    [SerializeField] private float wallJumpHorizontalLaunchSpeed = 10f;
+    [SerializeField] private float wallJumpLockTime = 0.12f;
+    [SerializeField] private bool wallCountsAsGroundForDash = true;
+
+    [Header("Wall Grab Conditions")]
+    [SerializeField] private bool requireFallingForWallGrab = true;
+    [SerializeField] private float wallGrabFallVyThreshold = -0.001f;
+    [SerializeField] private bool disableWallGrabWhenBothSidesHit = true;
+    [SerializeField] private bool useTemporalBothSidesWindow = true;
+    [SerializeField] private float bothSidesWindow = 0.06f;
+
+    [Header("Jump Buffers Extra")]
+    [SerializeField] private bool enableDashJumpBuffer = true;
+    [SerializeField] private float dashJumpBufferTime = 0.1f;
+
+    [Header("Sprite Flip")]
+    [SerializeField] private Transform spriteChild;
+
+    [Header("Debug")]
+    [SerializeField] private bool drawGizmos = true;
+
+    // ===========================
+    //      RUNTIME STATE
+    // ===========================
+
+    // Apex bonus (movimiento más sensible en el apex)
+    [Header("Apex Bonus")]
+    public float apexVyThreshold = 1.0f;
+    public float apexBonusSpeedMultiplier = 1.15f;
+    public float apexBonusAccelMultiplier = 1.15f;
+
+    // Velocidad que crece en suelo con tiempo corriendo
+    [Header("Ground Run Speed Gain")]
+    public float runSpeedMin = 0f; // si es 0, se toma baseSpeed en Awake
+    public float runSpeedMax = 8f;
+    public float runGainPerSecond = 2.0f;
+    public float runDecayPerSecond = 4.0f;
+
+    // One-way (drop-through)
+    [Header("One-Way Platforms (Drop-Through)")]
+    public bool allowDropThrough = true;
+    public LayerMask oneWayMask;
+    public string oneWayTag = "OneWay";
+    public float dropThroughDuration = 0.25f;
+    public bool treatOneWayAsGround = true;
+
+    // Supresión de input a pared tras wall-jump
+    [Header("Wall Input Suppress")]
+    [Tooltip("Tiempo que se ignora el input hacia la pared tras saltar presionando contra ella.")]
+    public float wallInputSuppressTime = 0.4f;
+
+    // --- Components & cached ---
+    private Rigidbody2D rb;
+    private Collider2D col;
+
+    // --- Horizontal ---
+    private float currentVelX;
+    private int moveDir = 0;
+    private int lastPressedDir = 0;
+    private bool facingRight;
+
+    // --- Ground & jump ---
+    private bool isGrounded = false;
+    private bool canDoubleJump = false;
+
+    // --- Jump hold (carga de altura) ---
+    private bool isJumpingHoldPhase = false;
+    private bool jumpHeld = false;
+    private float jumpHoldTimer = 0f;
+    private float jumpExtraImpulseLeft = 0f;
+    private float jumpExtraImpulsePerSec = 0f;
+
+    // --- Dash ---
+    private bool isDashing = false;
+    private Vector2 dashDir = Vector2.zero;
+
+    // Downward/diagonal-hold dash
+    private bool isDownwardHoldDash = false;
+    private bool cancelDownwardDashQueued = false;
+
+    // Dash charges
+    private float[] dashCooldownLeft;
+    private bool[] dashReady;
+    private bool[] dashAwaitGround;
+
+    // Fall / slam (legacy)
+    private float fallTimer = 0f;
+    private bool wasFalling = false;
+    private bool isSlamming = false;
+
+    // Buffers & timers
+    private float coyoteTimer = 0f;
+    private float jumpBufferTimer = 0f;
+    private float dashBufferTimer = 0f;
+    private float dashJumpBufferTimer = 0f;
+
+    // Wall states
+    private enum WallSide { None, Left, Right }
+    private WallSide wallSide = WallSide.None;
+    private bool isOnWall = false;
+    private bool isWallGrabbing = false;
+    private bool isWallSliding = false;
+    private float wallGrabTimer = 0f;
+    private float wallRegrabTimer = 0f;
+
+    // Wall-jump lock / input suppress
+    private float wallJumpLockTimer = 0f;
+    private float wallInputSuppressTimer = 0f;
+    private WallSide suppressedWallSide = WallSide.None;
+
+    // Fall ramp context (cambiar gravedad en caída según origen)
+    private enum FallRampContext { None, FromJump, FromDash }
+    private FallRampContext fallContext = FallRampContext.None;
+
+    private bool executedJumpThisFrame = false;
+
+    // Velocidad base dinámica en suelo + apex mults
+    private float currentRunSpeed;
+    private float apexSpeedMultNow = 1f;
+    private float apexAccelMultNow = 1f;
+
+    // OneWay tracking y bloqueos
+    private Collider2D lastGroundCollider = null;
+    private bool dropThroughActive = false;
+    private Collider2D dropThroughCollider = null;
+    private float dropThroughTimer = 0f;
+    private bool dropBlockWallGrabActive = false;
+
+    // OneWays ignoradas en dash ascendente
+    private readonly List<Collider2D> tempIgnoredOneWays = new List<Collider2D>();
+
+    // Memoria temporal de hits por lado (ventana "ambos lados")
+    private float leftHitRecentTimer = 0f;
+    private float rightHitRecentTimer = 0f;
+
+    // ===========================
+    //       SMALL HELPERS
+    // ===========================
+
+    // ¿Se permite agarrarse a pared ahora? (ej: solo si cayendo)
+    private bool CanWallAttachNow() {
+        if (!requireFallingForWallGrab) return true;
+        return rb != null && rb.velocity.y <= wallGrabFallVyThreshold;
+    }
+
+    // Raycast detallado a pared (respeta layer y fallback por tag)
+    private bool CastWallAtDetailed(Vector2 localOffset, Vector2 dir, out Collider2D hitCol) {
+        Vector2 origin = (Vector2)transform.position + localOffset;
+
+        RaycastHit2D hit = Physics2D.Raycast(origin, dir, wallRayLength, groundMask);
+        if (hit.collider != null) { hitCol = hit.collider; return true; }
+
+        RaycastHit2D hitNoMask = Physics2D.Raycast(origin, dir, wallRayLength);
+        if (hitNoMask.collider != null && hitNoMask.collider.CompareTag(groundTag)) {
+            hitCol = hitNoMask.collider; return true;
+        }
+
+        hitCol = null;
+        return false;
+    }
+
+    // Reinicia estados verticales comunes al iniciar saltos/dashes
+    private void ResetVerticalStateAndExitWalls() {
+        wasFalling = false;
+        fallTimer = 0f;
+        isSlamming = false;
+        ExitWallStates();
+        wallJumpLockTimer = 0f;
+    }
+
+    // Intención de drop (S presionado)
+    private static bool IsDropIntent() => Input.GetKey(KeyCode.S);
+
+    // ===========================
+    //          LIFECYCLE
+    // ===========================
+
+    private void Awake() {
+        rb = GetComponent<Rigidbody2D>();
+        col = GetComponent<Collider2D>();
+        rb.gravityScale = Mathf.Max(0.1f, rb.gravityScale);
+        facingRight = faceRightDefault;
+
+        // Init dash charges
+        int n = Mathf.Max(1, dashMaxCharges);
+        dashCooldownLeft = new float[n];
+        dashReady = new bool[n];
+        dashAwaitGround = new bool[n];
+        for (int i = 0; i < n; i++) {
+            dashCooldownLeft[i] = 0f;
+            dashReady[i] = true;
+            dashAwaitGround[i] = false;
+        }
+
+        // Init run speed range
+        if (runSpeedMin <= 0f) runSpeedMin = baseSpeed;
+        currentRunSpeed = Mathf.Max(runSpeedMin, baseSpeed);
+        runSpeedMax = Mathf.Max(runSpeedMax, runSpeedMin);
+    }
+    private void Update() {
+        executedJumpThisFrame = false;
+
+        // ==== Timers globales ====
+        if (wallInputSuppressTimer > 0f) {
+            wallInputSuppressTimer -= Time.deltaTime;
+            if (wallInputSuppressTimer <= 0f) {
+                wallInputSuppressTimer = 0f;
+                suppressedWallSide = WallSide.None;
+            }
+        }
+        if (dashJumpBufferTimer > 0f) dashJumpBufferTimer -= Time.deltaTime;
+
+        // ==== Input horizontal + facing ====
+        ReadHorizontalInput();
+        HandleFacing();
+
+        // ==== Ground check + coyote ====
+        isGrounded = CheckGrounded();
+        if (isGrounded) {
+            canDoubleJump = true;
+            coyoteTimer = coyoteTime;
+            fallContext = FallRampContext.None;
+            isSlamming = false;
+        }
+        else if (coyoteTimer > 0f) {
+            coyoteTimer -= Time.deltaTime;
+        }
+
+        // ==== Walls / estados de pared (incluye "ambos lados recientes") ====
+        UpdateWallDetectionAndStates(Time.deltaTime);
+
+        // ==== Inputs de salto (down/up/hold) ====
+        bool jumpDown = Input.GetKeyDown(jumpKey);
+        bool jumpUp = Input.GetKeyUp(jumpKey);
+        jumpHeld = Input.GetKey(jumpKey);
+
+        // Cancelación del downward dash con salto
+        if (isDownwardHoldDash && jumpDown) {
+            cancelDownwardDashQueued = true;
+        }
+
+        // ==== Drop-through (S + Space sobre OneWay) ====
+        bool consumedByDrop = false;
+        if (!isDashing && allowDropThrough && jumpDown && IsDropIntent() && isGrounded && IsOneWayPlatform(lastGroundCollider)) {
+            StartCoroutine(DropThroughRoutine(lastGroundCollider, dropThroughDuration));
+            executedJumpThisFrame = true;
+            consumedByDrop = true; // evita armar buffers y saltar en este frame
+        }
+
+        // ==== Buffers de salto ====
+        if (!consumedByDrop && !isDownwardHoldDash) {
+            if (jumpDown) {
+                bool sHeld = IsDropIntent();
+
+                // Buffer normal: NO lo armamos si estás dashing o si S está presionado en aire
+                if (!isDashing && (!sHeld || isOnWall || isGrounded)) {
+                    jumpBufferTimer = jumpBufferTime;
+                }
+
+                // Buffer para saltar al terminar el dash: SOLO si estás dashing
+                if (isDashing && enableDashJumpBuffer) {
+                    if (!sHeld || isOnWall || isGrounded) dashJumpBufferTimer = dashJumpBufferTime;
+                }
+            }
+            else if (jumpBufferTimer > 0f) {
+                jumpBufferTimer -= Time.deltaTime;
+            }
+        }
+        else {
+            jumpBufferTimer = 0f;
+        }
+
+        // ==== Saltos (bloqueados mientras dure cualquier dash) ====
+        if (!executedJumpThisFrame && !isDownwardHoldDash && !isDashing) {
+            HandleJumpInput_ImmediatePressHold(jumpDown, jumpUp);
+        }
+
+        // ==== Dash + buffer de dash ====
+        if (!isDashing && Input.GetKeyDown(dashKey)) {
+            bool fired = TryDashNow();
+            if (!fired) dashBufferTimer = dashBufferTime;
+        }
+        else if (dashBufferTimer > 0f && !isDashing) {
+            dashBufferTimer -= Time.deltaTime;
+            if (dashBufferTimer > 0f && !executedJumpThisFrame) {
+                TryDashNow();
+            }
+        }
+
+        // ==== Cargas de dash ====
+        bool groundLike = isGrounded || (isOnWall && wallCountsAsGroundForDash);
+        UpdateDashCharges(Time.deltaTime, groundLike);
+
+        // ==== Otros timers ====
+        if (wallJumpLockTimer > 0f) wallJumpLockTimer -= Time.deltaTime;
+
+        if (dropThroughActive) {
+            dropThroughTimer -= Time.deltaTime;
+            if (dropThroughTimer <= 0f) {
+                dropThroughActive = false;
+                dropThroughCollider = null;
+            }
+        }
+    }
+
+    private void FixedUpdate() {
+        // El dash mueve por corrutina; acá solo aplicamos física normal
+        if (isDashing) return;
+
+        float dt = Time.fixedDeltaTime;
+
+        UpdateApexMultipliers();
+        UpdateGroundRunSpeed(dt);
+
+        float effectiveBaseSpeed = Mathf.Clamp(currentRunSpeed, runSpeedMin, runSpeedMax);
+        float speedWithApex = effectiveBaseSpeed * speedMultiplier * apexSpeedMultNow;
+        float accelWithApex = accel * apexAccelMultNow;
+        float targetSpeed = moveDir * speedWithApex;
+
+        // Control horizontal con lock tras wall-jump
+        if (wallJumpLockTimer > 0f) {
+            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+        }
+        else if (isGrounded || moveDir != 0) {
+            currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accelWithApex * dt);
+            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+        }
+        else {
+            currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
+            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+        }
+
+        // Wall-grab (pegado estático)
+        if (isWallGrabbing && !isWallSliding && !dropBlockWallGrabActive) {
+            rb.velocity = Vector2.zero;
+        }
+
+        // Altura adicional por hold
+        ApplyJumpHoldBoostInFixed();
+
+        // Gravedades personalizadas (incluye rampas y excepciones)
+        ApplyMarioStyleGravities();
+    }
+
+    // ===========================
+    //     INPUT & ORIENTATION
+    // ===========================
+
+    private void ReadHorizontalInput() {
+        bool leftHeld = Input.GetKey(KeyCode.A);
+        bool rightHeld = Input.GetKey(KeyCode.D);
+
+        if (Input.GetKeyDown(KeyCode.A)) lastPressedDir = -1;
+        if (Input.GetKeyDown(KeyCode.D)) lastPressedDir = 1;
+
+        // Durante lock no se actualiza input horizontal
+        if (wallJumpLockTimer > 0f) return;
+
+        // Resolver conflicto A+D por "última tecla" (lastPressedDir)
+        if (leftHeld && rightHeld) moveDir = lastPressedDir;
+        else if (leftHeld) moveDir = -1;
+        else if (rightHeld) moveDir = 1;
+        else moveDir = 0;
+
+        // Supresión del input hacia la pared tras wall-jump
+        if (wallInputSuppressTimer > 0f && suppressedWallSide != WallSide.None) {
+            if (suppressedWallSide == WallSide.Left && leftHeld) {
+                moveDir = rightHeld ? 1 : 0;
+            }
+            else if (suppressedWallSide == WallSide.Right && rightHeld) {
+                moveDir = leftHeld ? -1 : 0;
+            }
+
+            // Si ambas teclas y la suprimida coincide con la última, invierte
+            if (leftHeld && rightHeld) {
+                if (suppressedWallSide == WallSide.Left && lastPressedDir < 0) moveDir = 1;
+                if (suppressedWallSide == WallSide.Right && lastPressedDir > 0) moveDir = -1;
+            }
+        }
+    }
+
+    private void HandleFacing() {
+        // Solo cambiamos facing cuando hay input horizontal y no hay lock
+        if (moveDir != 0 && wallJumpLockTimer <= 0f) {
+            bool shouldFaceRight = moveDir > 0;
+            if (shouldFaceRight != facingRight) {
+                facingRight = shouldFaceRight;
+                FlipSprite();
+            }
+        }
+    }
+
+    private void FlipSprite() {
+        if (spriteChild == null) return;
+        Vector3 s = spriteChild.localScale;
+        s.x *= -1f;
+        spriteChild.localScale = s;
+    }
+    // ===========================
+    //      GROUND & WALLS
+    // ===========================
+
+    private bool CheckGrounded() {
+        bool l = CheckGroundRayAt(groundRayOffsetLeft);
+        bool r = CheckGroundRayAt(groundRayOffsetRight);
+        return l || r;
+    }
+
+    private static bool IsSameCollider(Collider2D a, Collider2D b) {
+        if (a == null || b == null) return false;
+        return a == b;
+    }
+
+    private bool CheckGroundRayAt(Vector2 localOffset) {
+        Vector2 origin = (Vector2)transform.position + localOffset;
+
+        // 1) Con máscara
+        RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, groundRayLength, groundMask);
+        if (hit.collider != null) {
+            // Ignora la one-way que estás atravesando ahora mismo
+            if (!(dropThroughActive && IsSameCollider(hit.collider, dropThroughCollider))) {
+                lastGroundCollider = hit.collider;
+                return true;
+            }
+        }
+
+        // 2) Sin máscara: acepta por tag de suelo o por one-way (si se trata como suelo)
+        RaycastHit2D hitNoMask = Physics2D.Raycast(origin, Vector2.down, groundRayLength);
+        if (hitNoMask.collider != null) {
+            Collider2D c = hitNoMask.collider;
+
+            if (dropThroughActive && IsSameCollider(c, dropThroughCollider)) {
+                return false;
+            }
+
+            if (c.CompareTag(groundTag)) {
+                lastGroundCollider = c; return true;
+            }
+
+            if (treatOneWayAsGround && IsOneWayPlatform(c)) {
+                lastGroundCollider = c; return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void UpdateWallDetectionAndStates(float dt) {
+        // Bloqueo total del sistema de pared durante el drop-through real
+        if (!enableWallGrab || dropBlockWallGrabActive) {
+            isOnWall = isWallGrabbing = isWallSliding = false;
+            wallSide = WallSide.None;
+            if (wallRegrabTimer > 0f) wallRegrabTimer -= dt;
+            return;
+        }
+
+        // Cuatro rayos por lado (A/B); combinamos por lado
+        bool leftA = CastWallAtDetailed(wallLeftOffsetA, Vector2.left, out _);
+        bool leftB = CastWallAtDetailed(wallLeftOffsetB, Vector2.left, out _);
+        bool rightA = CastWallAtDetailed(wallRightOffsetA, Vector2.right, out _);
+        bool rightB = CastWallAtDetailed(wallRightOffsetB, Vector2.right, out _);
+
+        bool left = leftA || leftB;
+        bool right = rightA || rightB;
+
+        // Ventana temporal para el caso "ambas paredes" (al atravesar una OneWay)
+        if (useTemporalBothSidesWindow) {
+            if (left) leftHitRecentTimer = bothSidesWindow;
+            if (right) rightHitRecentTimer = bothSidesWindow;
+            if (leftHitRecentTimer > 0f) leftHitRecentTimer -= dt;
+            if (rightHitRecentTimer > 0f) rightHitRecentTimer -= dt;
+        }
+
+        bool bothSidesHitInstant = left && right;
+        bool bothSidesHitRecent = useTemporalBothSidesWindow
+            ? (leftHitRecentTimer > 0f && rightHitRecentTimer > 0f)
+            : bothSidesHitInstant;
+
+        // Resolución del lado de pared preferido
+        WallSide newSide = WallSide.None;
+        if (left && !right) newSide = WallSide.Left;
+        else if (right && !left) newSide = WallSide.Right;
+        else if (left && right) newSide = (lastPressedDir >= 0) ? WallSide.Right : WallSide.Left;
+
+        bool wasOnWall = isOnWall;
+        WallSide prevSide = wallSide;
+
+        bool touchingWall = (newSide != WallSide.None);
+        bool canAttach = touchingWall && !isGrounded && CanWallAttachNow();
+
+        // Si detectamos ambas paredes "cercanas" desactivamos wall-grab (evita atasco al subir one-ways)
+        if (disableWallGrabWhenBothSidesHit && bothSidesHitRecent) {
+            canAttach = false;
+        }
+
+        isOnWall = canAttach;
+        wallSide = isOnWall ? newSide : WallSide.None;
+
+        if (wallRegrabTimer > 0f) wallRegrabTimer -= dt;
+
+        if (isOnWall) {
+            if (!wasOnWall || (prevSide != wallSide)) {
+                if (wallRegrabTimer <= 0f) {
+                    EnterWallGrab();
+                }
+            }
+
+            if (isWallGrabbing && !isWallSliding) {
+                wallGrabTimer += dt;
+                if (wallGrabTimer >= wallGrabHoldTime) {
+                    EnterWallSlide();
+                }
+            }
+        }
+        else {
+            if (wasOnWall) {
+                ExitWallStates();
+                wallRegrabTimer = wallRegrabCooldown;
+            }
+        }
+    }
+
+    private bool CastWallAt(Vector2 localOffset, Vector2 dir) {
+        Vector2 origin = (Vector2)transform.position + localOffset;
+        RaycastHit2D hit = Physics2D.Raycast(origin, dir, wallRayLength, groundMask);
+        if (hit.collider != null) return true;
+
+        RaycastHit2D hitNoMask = Physics2D.Raycast(origin, dir, wallRayLength);
+        return (hitNoMask.collider != null && hitNoMask.collider.CompareTag(groundTag));
+    }
+
+    private void EnterWallGrab() {
+        isWallGrabbing = true;
+        isWallSliding = false;
+        wallGrabTimer = 0f;
+        isSlamming = false;
+
+        // Skin push para "pegar" al borde y evitar jitter visual
+        float push = wallSkinPush;
+        if (wallSide == WallSide.Left) transform.position += new Vector3(+push, 0f, 0f);
+        if (wallSide == WallSide.Right) transform.position += new Vector3(-push, 0f, 0f);
+
+        // Al agarrarte de la pared, habilita doble salto
+        canDoubleJump = true;
+    }
+
+    private void EnterWallSlide() {
+        isWallGrabbing = false;
+        isWallSliding = true;
+    }
+
+    private void ExitWallStates() {
+        isWallGrabbing = false;
+        isWallSliding = false;
+        wallGrabTimer = 0f;
+        wallSide = WallSide.None;
+    }
+    // ===========================
+    //            JUMP
+    // ===========================
+
+    private void HandleJumpInput_ImmediatePressHold(bool jumpDown, bool jumpUp) {
+        // Wall-jump tiene prioridad si estamos en pared (buffer ya contemplado afuera)
+        if ((isWallGrabbing || isWallSliding) && (jumpDown || (jumpBufferTimer > 0f))) {
+            DoWallJump();
+            jumpBufferTimer = 0f;
+            executedJumpThisFrame = true;
+            return;
+        }
+
+        bool canGroundLikeJumpNow = isGrounded || (coyoteTimer > 0f);
+
+        // Consumir buffer normal en el primer frame válido
+        if (jumpBufferTimer > 0f && canGroundLikeJumpNow) {
+            DoGroundLikeJump();
+            jumpBufferTimer = 0f;
+            executedJumpThisFrame = true;
+            return;
+        }
+
+        // Salto inmediato por pulsación
+        if (jumpDown) {
+            if (canGroundLikeJumpNow) {
+                jumpBufferTimer = 0f;
+                DoGroundLikeJump();
+                executedJumpThisFrame = true;
+                return;
+            }
+            if (!isGrounded && canDoubleJump) {
+                DoDoubleJump();
+                executedJumpThisFrame = true;
+                return;
+            }
+        }
+
+        // Soltar para cortar el hold
+        if (jumpUp) {
+            isJumpingHoldPhase = false;
+        }
+    }
+
+    // Helper común para iniciar un salto (ground-like o doble)
+    private void BeginJumpCommon(bool consumeDoubleJump) {
+        // Resetear vertical, salir de pared, marcar contexto
+        rb.velocity = new Vector2(rb.velocity.x, 0f);
+        ResetVerticalStateAndExitWalls();
+        fallContext = FallRampContext.FromJump;
+
+        // Consumo de doble salto (si aplica)
+        if (consumeDoubleJump) {
+            canDoubleJump = false;
+        }
+
+        // Cálculo de impulso inicial y fase de hold (igual que antes)
+        float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
+        float initialImpulse = jumpMinForce * riseScale;
+        rb.AddForce(Vector2.up * initialImpulse, ForceMode2D.Impulse);
+
+        float extraTotal = Mathf.Max(0f, (jumpMaxForce - jumpMinForce) * riseScale);
+        jumpExtraImpulseLeft = extraTotal;
+        jumpExtraImpulsePerSec = (jumpMaxChargeTime > 0f)
+            ? (extraTotal / jumpMaxChargeTime)
+            : (extraTotal / Mathf.Epsilon);
+
+        isJumpingHoldPhase = true;
+        jumpHoldTimer = 0f;
+    }
+
+    private void DoGroundLikeJump() {
+        BeginJumpCommon(consumeDoubleJump: false);
+    }
+
+    private void DoDoubleJump() {
+        BeginJumpCommon(consumeDoubleJump: true);
+    }
+
+    // Salto EXTRA al cancelar downward dash (no-hold, no consume doble)
+    private void DoDownwardCancelJump() {
+        rb.velocity = new Vector2(rb.velocity.x, 0f);
+        ResetVerticalStateAndExitWalls();
+        fallContext = FallRampContext.FromJump;
+
+        float impulse = Mathf.Max(0f, downwardCancelJumpForce);
+        rb.AddForce(Vector2.up * impulse, ForceMode2D.Impulse);
+
+        isJumpingHoldPhase = false;
+        jumpExtraImpulseLeft = 0f;
+        jumpHoldTimer = 0f;
+    }
+
+    private void DoWallJump() {
+        // Guardar lado y calcular dirección de salida
+        WallSide prevWallSide = wallSide;
+        int away = (prevWallSide == WallSide.Right) ? -1 : +1;
+
+        // ¿mantenía input hacia pared?
+        bool towardWall = (prevWallSide == WallSide.Left && Input.GetKey(KeyCode.A))
+                       || (prevWallSide == WallSide.Right && Input.GetKey(KeyCode.D));
+
+        // Bonus si mantiene input opuesto (hacia afuera)
+        bool inputOpposite = (away < 0 && Input.GetKey(KeyCode.A)) || (away > 0 && Input.GetKey(KeyCode.D));
+        float launchX = wallJumpHorizontalLaunchSpeed * (inputOpposite ? wallJumpOppositeMultiplier : 1f);
+
+        // Reset y lanzamiento
+        rb.velocity = Vector2.zero;
+        ResetVerticalStateAndExitWalls();
+        fallContext = FallRampContext.FromJump;
+
+        currentVelX = away * launchX;
+        rb.velocity = new Vector2(currentVelX, 0f);
+        rb.AddForce(Vector2.up * wallJumpVerticalForce, ForceMode2D.Impulse);
+
+        // Arranca fase de hold como en un salto normal
+        float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
+        float extraTotal = Mathf.Max(0f, (jumpMaxForce - jumpMinForce) * riseScale);
+        jumpExtraImpulseLeft = extraTotal;
+        jumpExtraImpulsePerSec = (jumpMaxChargeTime > 0f)
+            ? (extraTotal / jumpMaxChargeTime)
+            : (extraTotal / Mathf.Epsilon);
+        isJumpingHoldPhase = true;
+        jumpHoldTimer = 0f;
+
+        // Lock y regrab cooldown
+        wallJumpLockTimer = Mathf.Max(0f, wallJumpLockTime);
+        wallRegrabTimer = wallRegrabCooldown;
+
+        // Supresión de input hacia pared si correspondía
+        if (towardWall) {
+            suppressedWallSide = prevWallSide;
+            wallInputSuppressTimer = Mathf.Max(0f, wallInputSuppressTime);
+        }
+
+        // Orientar sprite hacia el movimiento si hace falta
+        if ((away > 0 && !facingRight) || (away < 0 && facingRight)) {
+            facingRight = !facingRight;
+            FlipSprite();
+        }
+    }
+
+    private void ApplyJumpHoldBoostInFixed() {
+        // Solo aplicamos mientras subimos y hay carga restante
+        if (!isJumpingHoldPhase) return;
+        if (!jumpHeld || jumpHoldTimer >= jumpMaxChargeTime || jumpExtraImpulseLeft <= 0f || rb.velocity.y <= 0f) {
+            isJumpingHoldPhase = false;
+            return;
+        }
+
+        float dt = Time.fixedDeltaTime;
+        float add = Mathf.Min(jumpExtraImpulsePerSec * dt, jumpExtraImpulseLeft);
+
+        rb.AddForce(Vector2.up * add, ForceMode2D.Impulse);
+        jumpExtraImpulseLeft -= add;
+        jumpHoldTimer += dt;
+
+        if (jumpExtraImpulseLeft <= 0f || jumpHoldTimer >= jumpMaxChargeTime) {
+            isJumpingHoldPhase = false;
+        }
+    }
+
+    private void ApplyMarioStyleGravities() {
+        // Excepciones: downward-hold dash gestiona su caída aparte
+        if (isDownwardHoldDash) return;
+
+        // Slam legacy
+        if (isSlamming) {
+            float multiplier = fallGravityMultiplier * Mathf.Max(0f, 6f);
+            rb.velocity += Vector2.up * Physics2D.gravity.y * multiplier * Time.fixedDeltaTime;
+            return;
+        }
+
+        // Wall-slide con gravedad reducida
+        if (isWallSliding) {
+            float mult = Mathf.Max(0f, wallSlideGravityMultiplier);
+            rb.velocity += Vector2.up * Physics2D.gravity.y * mult * Time.fixedDeltaTime;
+            return;
+        }
+
+        // Caída con rampa (FromJump o FromDash)
+        if (rb.velocity.y < 0f) {
+            if (!wasFalling) {
+                wasFalling = true;
+                fallTimer = 0f;
+                rb.velocity = new Vector2(rb.velocity.x, 0f);
+            }
+            else {
+                fallTimer += Time.fixedDeltaTime;
+            }
+
+            float activeRamp = (fallContext == FallRampContext.FromDash) ? fallRampTimeDash : fallRampTimeJump;
+            float t = (activeRamp > 0f) ? Mathf.Clamp01(fallTimer / activeRamp) : 1f;
+            float currentMultiplier = Mathf.Lerp(1f, fallGravityMultiplier, t);
+
+            rb.velocity += Vector2.up * Physics2D.gravity.y * currentMultiplier * Time.fixedDeltaTime;
+        }
+        else {
+            // Subida: aplicar rise gravity
+            wasFalling = false;
+            if (rb.velocity.y > 0f) {
+                rb.velocity += Vector2.up * Physics2D.gravity.y * riseGravityMultiplier * Time.fixedDeltaTime;
+            }
+        }
+    }
+    // ===========================
+    //            DASH
+    // ===========================
+
+    // Distancia segura permitida (cast contra colisión, con skin)
+    private float ComputeDashAllowedDistance(Vector2 dir) {
+        if (dir.sqrMagnitude <= 0f) return 0f;
+
+        ContactFilter2D filter = new ContactFilter2D {
+            useTriggers = false,
+            useLayerMask = true
+        };
+        filter.SetLayerMask(groundMask);
+
+        float maxCheck = Mathf.Max(0f, dashDistance + dashWallSafeDistance);
+        RaycastHit2D[] hits = new RaycastHit2D[16];
+        int count = col.Cast(dir, filter, hits, maxCheck);
+
+        float minHitDist = maxCheck;
+        for (int i = 0; i < count; i++) {
+            var h = hits[i];
+            if (h.collider == null) continue;
+
+            // Si vamos hacia arriba, ignorar OneWay como obstáculo
+            if (dir.y > 0f && IsOneWayPlatform(h.collider)) continue;
+
+            if (h.distance < minHitDist) {
+                minHitDist = h.distance;
+            }
+        }
+
+        return (minHitDist < maxCheck)
+            ? Mathf.Clamp(minHitDist - dashWallSafeDistance, 0f, dashDistance)
+            : dashDistance;
+    }
+
+    // Consumir el buffer de salto del dash al terminarlo (respetando reglas de OneWay + S)
+    private bool TryConsumeDashJumpBuffer() {
+        if (!enableDashJumpBuffer || dashJumpBufferTimer <= 0f) return false;
+
+        // Si estás sobre OneWay e intentando drop (S), no consumas
+        if (isGrounded && IsDropIntent() && IsOneWayPlatform(lastGroundCollider)) return false;
+
+        dashJumpBufferTimer = 0f;
+
+        if (isGrounded || coyoteTimer > 0f) {
+            DoGroundLikeJump();
+            return true;
+        }
+        if (!isGrounded && canDoubleJump) {
+            DoDoubleJump();
+            return true;
+        }
+        return false;
+    }
+
+    private bool TryDashNow() {
+        if (isDashing) return false;
+
+        int readyIdx = GetReadyDashIndex();
+        if (readyIdx < 0) return false;
+
+        Vector2 dir;
+
+        if (isGrounded) {
+            // En suelo: solo horizontal. Si no hay input, usa la orientación actual.
+            bool left = Input.GetKey(KeyCode.A);
+            bool right = Input.GetKey(KeyCode.D);
+            bool up = Input.GetKey(KeyCode.W);
+            bool down = Input.GetKey(KeyCode.S);
+            if (up || down) return false;
+
+            int hx = (left ^ right) ? (left ? -1 : 1) : (facingRight ? 1 : -1);
+            dir = new Vector2(hx, 0f);
+        }
+        else {
+            // En aire: 8 direcciones; sin input, usa facing
+            int x = 0, y = 0;
+            if (Input.GetKey(KeyCode.D)) x = 1;
+            if (Input.GetKey(KeyCode.A)) x = -1;
+            if (Input.GetKey(KeyCode.W)) y = 1;
+            if (Input.GetKey(KeyCode.S)) y = -1;
+
+            dir = new Vector2(x, y);
+            dir = (dir == Vector2.zero) ? (facingRight ? Vector2.right : Vector2.left) : dir.normalized;
+
+            if (!allowDownwardDash && dir.y < 0f) return false;
+        }
+
+        // Downward/diagonal con hold-to-ground
+        if (slamOnDownwardDash && dir.y < 0f) {
+            ConsumeDashCharge(readyIdx);
+            StartCoroutine(DownwardHoldDashRoutine(dir));
+            return true;
+        }
+
+        // Dash normal (lados/arriba)
+        float allowedDistance = ComputeDashAllowedDistance(dir);
+        if (allowedDistance <= 0.0001f) return false;
+
+        // Si el dash es ascendente, ignorar temporalmente las OneWay en su trayectoria
+        if (dir.y > 0f) {
+            PrepareUpwardDashIgnoreOneWays(dir, allowedDistance);
+        }
+
+        ConsumeDashCharge(readyIdx);
+        StartCoroutine(DashRoutine(dir, allowedDistance));
+        return true;
+    }
+
+    private IEnumerator DownwardHoldDashRoutine(Vector2 dir) {
+        isDashing = true;
+        isDownwardHoldDash = true;
+        cancelDownwardDashQueued = false;
+        dashDir = dir.normalized;
+        ExitWallStates();
+
+        float originalGravity = rb.gravityScale;
+        rb.gravityScale = 0f;
+
+        float speed = dashSpeed / Mathf.Max(0.01f, downwardDashSpeedDivisor);
+
+        ContactFilter2D filter = new ContactFilter2D { useTriggers = false, useLayerMask = true };
+        filter.SetLayerMask(groundMask);
+
+        WaitForFixedUpdate wait = new WaitForFixedUpdate();
+
+        while (true) {
+            // Cancelación manual con Space
+            if (cancelDownwardDashQueued) {
+                cancelDownwardDashQueued = false;
+                isDownwardHoldDash = false;
+                isDashing = false;
+                rb.gravityScale = originalGravity;
+
+                if (!isGrounded && canDoubleJump) DoDoubleJump();
+                else DoDownwardCancelJump();
+
+                fallContext = FallRampContext.FromDash;
+                yield break;
+            }
+
+            float dt = Time.fixedDeltaTime;
+            float step = speed * dt;
+
+            // Cast frontal para parar con skin al tocar suelo/obstáculo
+            RaycastHit2D[] hits = new RaycastHit2D[8];
+            int count = col.Cast(dashDir, filter, hits, step + dashWallSafeDistance);
+            bool willHit = false;
+            float hitDist = Mathf.Infinity;
+
+            for (int i = 0; i < count; i++) {
+                var h = hits[i];
+                if (h.collider == null) continue;
+                hitDist = Mathf.Min(hitDist, h.distance);
+                willHit = true;
+            }
+
+            if (willHit) {
+                float moveDist = Mathf.Max(0f, hitDist - downwardGroundStopSkin);
+                Vector2 nextPos = rb.position + dashDir * moveDist;
+                rb.MovePosition(nextPos);
+
+                // Fin del dash descendente
+                rb.gravityScale = originalGravity;
+                isDownwardHoldDash = false;
+                isDashing = false;
+
+                wasFalling = false;
+                fallTimer = 0f;
+                fallContext = FallRampContext.FromDash;
+
+                // Consumir buffer si corresponde
+                TryConsumeDashJumpBuffer();
+                yield break;
+            }
+            else {
+                Vector2 nextPos = rb.position + dashDir * step;
+                rb.MovePosition(nextPos);
+            }
+
+            yield return wait;
+        }
+    }
+
+    private IEnumerator DashRoutine(Vector2 dir, float allowedDistance) {
+        isDashing = true;
+        dashDir = dir;
+        isSlamming = false;
+        ExitWallStates();
+
+        float originalGravity = rb.gravityScale;
+        rb.gravityScale = 0f;
+
+        Vector2 originalVel = rb.velocity;
+        rb.velocity = Vector2.zero;
+
+        Vector2 targetPos = rb.position + dashDir * allowedDistance;
+
+        WaitForFixedUpdate wait = new WaitForFixedUpdate();
+        while ((rb.position - targetPos).sqrMagnitude > 0.0001f) {
+            float dt = Time.fixedDeltaTime;
+
+            // Actualizamos currentVelX para que al salir del dash el movimiento sea suave
+            float effectiveBaseSpeed = Mathf.Clamp(currentRunSpeed, runSpeedMin, runSpeedMax);
+            float speedWithApex = effectiveBaseSpeed * speedMultiplier * apexSpeedMultNow;
+            float targetSpeed = moveDir * speedWithApex;
+
+            if (moveDir != 0) currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accel * dt);
+            else currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
+
+            float step = dashSpeed * Time.fixedDeltaTime;
+            Vector2 nextPos = Vector2.MoveTowards(rb.position, targetPos, step);
+            rb.MovePosition(nextPos);
+
+            yield return wait;
+        }
+
+        rb.gravityScale = originalGravity;
+
+        // Recupera velocidad horizontal "natural" al terminar
+        rb.velocity = new Vector2(currentVelX, 0f);
+        wasFalling = false;
+        fallTimer = 0f;
+        fallContext = FallRampContext.FromDash;
+
+        // Restaurar colisiones one-way ignoradas (si hubo dash ascendente)
+        RestoreIgnoredOneWaysAfterDash();
+
+        isDashing = false;
+
+        // Consumir buffer de salto del dash (si aplica)
+        TryConsumeDashJumpBuffer();
+    }
+
+    private void UpdateDashCharges(float dt, bool groundLikeNow) {
+        int n = dashCooldownLeft.Length;
+        for (int i = 0; i < n; i++) {
+            if (dashReady[i]) continue;
+
+            if (dashCooldownLeft[i] > 0f) {
+                dashCooldownLeft[i] -= dt;
+                if (dashCooldownLeft[i] <= 0f) {
+                    dashCooldownLeft[i] = 0f;
+                    if (groundLikeNow) {
+                        dashReady[i] = true;
+                        dashAwaitGround[i] = false;
+                    }
+                    else {
+                        dashAwaitGround[i] = true;
+                    }
+                }
+            }
+            else {
+                if (dashAwaitGround[i] && groundLikeNow) {
+                    dashReady[i] = true;
+                    dashAwaitGround[i] = false;
+                }
+            }
+        }
+    }
+
+    private int GetReadyDashIndex() {
+        for (int i = 0; i < dashReady.Length; i++) {
+            if (dashReady[i]) return i;
+        }
+        return -1;
+    }
+
+    private void ConsumeDashCharge(int idx) {
+        if (idx < 0 || idx >= dashReady.Length) return; // sanity
+        dashReady[idx] = false;
+        dashAwaitGround[idx] = false;
+        dashCooldownLeft[idx] = dashCooldown;
+    }
+
+    // ===========================
+    //     APEX / RUN-SPEED / ONEWAY
+    // ===========================
+
+    private void UpdateApexMultipliers() {
+        float vy = rb.velocity.y;
+        float thr = Mathf.Max(0.0001f, apexVyThreshold);
+        float nearApex01 = 1f - Mathf.Clamp01(Mathf.Abs(vy) / thr);
+
+        apexSpeedMultNow = Mathf.Lerp(1f, Mathf.Max(1f, apexBonusSpeedMultiplier), nearApex01);
+        apexAccelMultNow = Mathf.Lerp(1f, Mathf.Max(1f, apexBonusAccelMultiplier), nearApex01);
+    }
+
+    private void UpdateGroundRunSpeed(float dt) {
+        bool hasInput = (moveDir != 0);
+        if (isGrounded && hasInput) currentRunSpeed = Mathf.MoveTowards(currentRunSpeed, runSpeedMax, runGainPerSecond * dt);
+        else currentRunSpeed = Mathf.MoveTowards(currentRunSpeed, runSpeedMin, runDecayPerSecond * dt);
+    }
+
+    private bool IsOneWayPlatform(Collider2D c) {
+        if (c == null) return false;
+
+        // Por capa
+        if ((oneWayMask.value & (1 << c.gameObject.layer)) != 0) return true;
+
+        // Por tag
+        if (!string.IsNullOrEmpty(oneWayTag) && c.CompareTag(oneWayTag)) return true;
+
+        // Por effector
+        if (c.GetComponent<PlatformEffector2D>() != null) return true;
+        if (c.GetComponentInParent<PlatformEffector2D>() != null) return true;
+
+        return false;
+    }
+
+    // Ignora one-ways que quedan en la trayectoria de un dash ascendente
+    private void PrepareUpwardDashIgnoreOneWays(Vector2 dir, float distance) {
+        tempIgnoredOneWays.Clear();
+        if (oneWayMask.value == 0) return;
+
+        ContactFilter2D filter = new ContactFilter2D { useTriggers = false, useLayerMask = true };
+        filter.SetLayerMask(oneWayMask);
+
+        RaycastHit2D[] hits = new RaycastHit2D[16];
+        int count = col.Cast(dir, filter, hits, distance);
+        for (int i = 0; i < count; i++) {
+            var c = hits[i].collider;
+            if (c == null) continue;
+            if (!IsOneWayPlatform(c)) continue;
+
+            if (!tempIgnoredOneWays.Contains(c)) {
+                Physics2D.IgnoreCollision(col, c, true);
+                tempIgnoredOneWays.Add(c);
+            }
+        }
+    }
+
+    private void RestoreIgnoredOneWaysAfterDash() {
+        for (int i = 0; i < tempIgnoredOneWays.Count; i++) {
+            var c = tempIgnoredOneWays[i];
+            if (c != null) Physics2D.IgnoreCollision(col, c, false);
+        }
+        tempIgnoredOneWays.Clear();
+    }
+
+    private IEnumerator DropThroughRoutine(Collider2D platform, float duration) {
+        if (platform == null) yield break;
+
+        // Activamos modo drop-through real
+        dropThroughActive = true;
+        dropThroughCollider = platform;
+        dropThroughTimer = duration;
+
+        // Bloquea wall-grab mientras atraviesas el volumen
+        dropBlockWallGrabActive = true;
+
+        // Ignora colisión con esa plataforma un rato
+        Physics2D.IgnoreCollision(col, platform, true);
+
+        // Forzamos “salir de suelo” y empuje leve hacia abajo
+        isGrounded = false;
+        rb.velocity = new Vector2(rb.velocity.x, Mathf.Min(rb.velocity.y, -0.1f));
+
+        // Espera duración real del drop
+        float t = 0f;
+        while (t < duration) {
+            t += Time.deltaTime;
+            yield return null;
+        }
+
+        // Reactiva colisión
+        Physics2D.IgnoreCollision(col, platform, false);
+
+        // Fin del bloqueo de wall-grab
+        dropBlockWallGrabActive = false;
+
+        // Pequeña tolerancia para que el raycast no la detecte inmediatamente
+        dropThroughTimer = 0.05f;
+        dropThroughActive = true;
+        dropThroughCollider = platform;
+    }
+
+    // ===========================
+    //           GIZMOS
+    // ===========================
+
+    private void OnDrawGizmosSelected() {
+        if (!drawGizmos) return;
+        Gizmos.color = Color.green;
+
+        // Suelo (dos rayos)
+        Vector2 originL = (Vector2)transform.position + groundRayOffsetLeft;
+        Vector2 originR = (Vector2)transform.position + groundRayOffsetRight;
+        Gizmos.DrawLine(originL, originL + Vector2.down * groundRayLength);
+        Gizmos.DrawLine(originR, originR + Vector2.down * groundRayLength);
+
+        // Pared izquierda (dos rayos)
+        Vector2 wlA = (Vector2)transform.position + wallLeftOffsetA;
+        Vector2 wlB = (Vector2)transform.position + wallLeftOffsetB;
+        Gizmos.DrawLine(wlA, wlA + Vector2.left * wallRayLength);
+        Gizmos.DrawLine(wlB, wlB + Vector2.left * wallRayLength);
+
+        // Pared derecha (dos rayos)
+        Vector2 wrA = (Vector2)transform.position + wallRightOffsetA;
+        Vector2 wrB = (Vector2)transform.position + wallRightOffsetB;
+        Gizmos.DrawLine(wrA, wrA + Vector2.right * wallRayLength);
+        Gizmos.DrawLine(wrB, wrB + Vector2.right * wallRayLength);
+    }
+
+    // ===========================
+    //        PUBLIC API
+    // ===========================
+
+    public void SetSpeedMultiplier(float multiplier) {
+        speedMultiplier = Mathf.Max(0f, multiplier);
+    }
+
+    public float CurrentHorizontalSpeed => currentVelX;
+    public bool IsGrounded => isGrounded;
+
+    public int CurrentDashCharges {
+        get {
+            int count = 0;
+            for (int i = 0; i < dashReady.Length; i++) if (dashReady[i]) count++;
+            return count;
+        }
+    }
+}
