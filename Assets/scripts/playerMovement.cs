@@ -1188,7 +1188,7 @@ public class Player2DController : MonoBehaviour {
         Gizmos.DrawLine(wrB, wrB + Vector2.right * wallRayLength);
     }
 
-    // API pública
+    //API pública
     public void SetSpeedMultiplier(float multiplier) {
         speedMultiplier = Mathf.Max(0f, multiplier);
     }
