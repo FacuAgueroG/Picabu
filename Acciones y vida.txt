@@ -1,0 +1,60 @@
+Acciones y vida
+
+Caminar
+Salto
+Golpear A (Normales / Combos - aire-tierra/ Ira de las madres)
+Golpear B (Normales / Combos - aire-tierra/ Ira de las madres)
+	Accion A+B (Si no se estaba en tercer AoB) (Normal / Ira de las madres)
+		Modificable - 3 Herramientas con 2 modificaciones cada una. 
+Dash
+Gancho
+Capi (Quiero que tenga decenas de funciones y que muchas las pueda cumplir el solo)
+Ira de las madres
+
+______________________
+Combos
+
+Tener en cuenta que los combos no solo son 
+
+AAA+B - aire - tierra
+BBB+A - aire - tierra
+
+También influyen 	
+	Las herramientas y sus modificaciones
+	Gancho
+	Capi
+_________________
+
+La vida funciona de la siguiente manera. 
+
+
+El daño recibido puede recuperarse en vida golpeando mas (como en bloodborne) poco a poco este daño recibido si no se golpea se vuelve vida perdida de forma permanente (siempre se pierde un poco para hacerlo una carrera contra reloj constante de perdida y ganancia de vida como en doom)
+
+Al matar a un enemigo este suelta una escencia se transforma en posible vida permanente => vuelvo al paso 1, tengo que ir a golpear a otros enemigos para volver a retomar vida.
+
+La herramienta y el choque contra el suelo también dan posible vida permanente.
+
+Ademas existen checkpoints para retomar toda la vida o ciertas fuentes que cumplen ese deber.
+
+___________________
+
+Ira de madres (Carga)
+
+La ira de madres se carga al golpear (poco a poco)
+Pero se carga mas rápido al realizar combos
+
+__________________
+
+Capi
+
+Capi puede hacer las siguientes acciones en combate
+
+Pelea contra un enemigo seleccionado
+Pelea contra enemigos al azar cerca mio
+Cubre golpes (si esta cerca mio tiene mas chances de cubrir el golpe mortal (una vez por enfrentamiento))
+Si estoy peleando en el aire y esta conmigo tardo mas en descender
+
+Capi puede hacer las siguientes acciones al no estar en combate
+Puede ir a ciertas direcciones si se las marcamos en el mapa para explorar por su cuenta (puede decirnos que es lo que vio)
+Si nos quedamos mucho tiempo quietos o incluso en pausa sam y capi arman un campamento el contara historias cuando saquemos la pausa
+Se puede enviar a capi a explorar (puede rellenar el mapa por su cuenta e incluso puede poner marcadores ->> hay cosas que solo puede descubrir el)
