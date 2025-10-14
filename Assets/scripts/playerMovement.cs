@@ -205,7 +205,7 @@ public class Player2DController : MonoBehaviour {
 
     private bool CanWallAttachNow() {
         if (!requireFallingForWallGrab) return true;
-        return rb != null && rb.velocity.y <= wallGrabFallVyThreshold;
+        return rb != null && rb.linearVelocity.y <= wallGrabFallVyThreshold;
     }
 
     private bool CastWallAtDetailed(Vector2 localOffset, Vector2 dir, out Collider2D hitCol) {
@@ -360,19 +360,19 @@ public class Player2DController : MonoBehaviour {
         float targetSpeed = moveDir * speedWithApex;
 
         if (wallJumpLockTimer > 0f) {
-            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+            rb.linearVelocity = new Vector2(currentVelX, rb.linearVelocity.y);
         }
         else if (isGrounded || moveDir != 0) {
             currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accelWithApex * dt);
-            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+            rb.linearVelocity = new Vector2(currentVelX, rb.linearVelocity.y);
         }
         else {
             currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
-            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+            rb.linearVelocity = new Vector2(currentVelX, rb.linearVelocity.y);
         }
 
         if (isWallGrabbing && !isWallSliding && !dropBlockWallGrabActive) {
-            rb.velocity = Vector2.zero;
+            rb.linearVelocity = Vector2.zero;
         }
 
         ApplyJumpHoldBoostInFixed();
@@ -627,7 +627,7 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void DoGroundLikeJump() {
-        rb.velocity = new Vector2(rb.velocity.x, 0f);
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
         wasFalling = false;
         fallTimer = 0f;
         isSlamming = false;
@@ -649,7 +649,7 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void DoDoubleJump() {
-        rb.velocity = new Vector2(rb.velocity.x, 0f);
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
         canDoubleJump = false;
         wasFalling = false;
         fallTimer = 0f;
@@ -671,7 +671,7 @@ public class Player2DController : MonoBehaviour {
     }
 
     private void DoDownwardCancelJump() {
-        rb.velocity = new Vector2(rb.velocity.x, 0f);
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
         wasFalling = false;
         fallTimer = 0f;
         isSlamming = false;
@@ -697,7 +697,7 @@ public class Player2DController : MonoBehaviour {
         bool inputOpposite = (away < 0 && Input.GetKey(KeyCode.A)) || (away > 0 && Input.GetKey(KeyCode.D));
         float launchX = wallJumpHorizontalLaunchSpeed * (inputOpposite ? wallJumpOppositeMultiplier : 1f);
 
-        rb.velocity = Vector2.zero;
+        rb.linearVelocity = Vector2.zero;
         ExitWallStates();
         wasFalling = false;
         fallTimer = 0f;
@@ -705,7 +705,7 @@ public class Player2DController : MonoBehaviour {
         fallContext = FallRampContext.FromJump;
 
         currentVelX = away * launchX;
-        rb.velocity = new Vector2(currentVelX, 0f);
+        rb.linearVelocity = new Vector2(currentVelX, 0f);
         rb.AddForce(Vector2.up * wallJumpVerticalForce, ForceMode2D.Impulse);
 
         float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
@@ -731,7 +731,7 @@ public class Player2DController : MonoBehaviour {
 
     private void ApplyJumpHoldBoostInFixed() {
         if (!isJumpingHoldPhase) return;
-        if (!jumpHeld || jumpHoldTimer >= jumpMaxChargeTime || jumpExtraImpulseLeft <= 0f || rb.velocity.y <= 0f) {
+        if (!jumpHeld || jumpHoldTimer >= jumpMaxChargeTime || jumpExtraImpulseLeft <= 0f || rb.linearVelocity.y <= 0f) {
             isJumpingHoldPhase = false;
             return;
         }
@@ -755,21 +755,21 @@ public class Player2DController : MonoBehaviour {
 
         if (isSlamming) {
             float multiplier = fallGravityMultiplier * Mathf.Max(0f, 6f);
-            rb.velocity += Vector2.up * Physics2D.gravity.y * (multiplier) * Time.fixedDeltaTime;
+            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * (multiplier) * Time.fixedDeltaTime;
             return;
         }
 
         if (isWallSliding) {
             float mult = Mathf.Max(0f, wallSlideGravityMultiplier);
-            rb.velocity += Vector2.up * Physics2D.gravity.y * mult * Time.fixedDeltaTime;
+            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * mult * Time.fixedDeltaTime;
             return;
         }
 
-        if (rb.velocity.y < 0f) {
+        if (rb.linearVelocity.y < 0f) {
             if (!wasFalling) {
                 wasFalling = true;
                 fallTimer = 0f;
-                rb.velocity = new Vector2(rb.velocity.x, 0f);
+                rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
             }
             else {
                 fallTimer += Time.fixedDeltaTime;
@@ -779,13 +779,13 @@ public class Player2DController : MonoBehaviour {
             float t = (activeRamp > 0f) ? Mathf.Clamp01(fallTimer / activeRamp) : 1f;
             float currentMultiplier = Mathf.Lerp(1f, fallGravityMultiplier, t);
 
-            rb.velocity += Vector2.up * Physics2D.gravity.y * (currentMultiplier) * Time.fixedDeltaTime;
+            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * (currentMultiplier) * Time.fixedDeltaTime;
         }
         else {
             wasFalling = false;
 
-            if (rb.velocity.y > 0f) {
-                rb.velocity += Vector2.up * Physics2D.gravity.y * (riseGravityMultiplier) * Time.fixedDeltaTime;
+            if (rb.linearVelocity.y > 0f) {
+                rb.linearVelocity += Vector2.up * Physics2D.gravity.y * (riseGravityMultiplier) * Time.fixedDeltaTime;
             }
         }
     }
@@ -989,8 +989,8 @@ public class Player2DController : MonoBehaviour {
 
         float originalGravity = rb.gravityScale;
         rb.gravityScale = 0f;
-        Vector2 originalVel = rb.velocity;
-        rb.velocity = Vector2.zero;
+        Vector2 originalVel = rb.linearVelocity;
+        rb.linearVelocity = Vector2.zero;
 
         Vector2 targetPos = rb.position + dashDir * allowedDistance;
 
@@ -1018,7 +1018,7 @@ public class Player2DController : MonoBehaviour {
 
         rb.gravityScale = originalGravity;
 
-        rb.velocity = new Vector2(currentVelX, 0f);
+        rb.linearVelocity = new Vector2(currentVelX, 0f);
         wasFalling = false;
         fallTimer = 0f;
         fallContext = FallRampContext.FromDash;
@@ -1075,7 +1075,7 @@ public class Player2DController : MonoBehaviour {
 
     // === Apex helpers ===
     private void UpdateApexMultipliers() {
-        float vy = rb.velocity.y;
+        float vy = rb.linearVelocity.y;
         float thr = Mathf.Max(0.0001f, apexVyThreshold);
 
         float nearApex01 = 1f - Mathf.Clamp01(Mathf.Abs(vy) / thr);
@@ -1151,7 +1151,7 @@ public class Player2DController : MonoBehaviour {
         Physics2D.IgnoreCollision(col, platform, true);
 
         isGrounded = false;
-        rb.velocity = new Vector2(rb.velocity.x, Mathf.Min(rb.velocity.y, -0.1f));
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, Mathf.Min(rb.linearVelocity.y, -0.1f));
 
         float t = 0f;
         while (t < duration) {

@@ -102,7 +102,7 @@ public class playerMovementRefactorized : MonoBehaviour {
     //      RUNTIME STATE
     // ===========================
 
-    // Apex bonus (movimiento más sensible en el apex)
+    // Apex bonus (movimiento mï¿½s sensible en el apex)
     [Header("Apex Bonus")]
     public float apexVyThreshold = 1.0f;
     public float apexBonusSpeedMultiplier = 1.15f;
@@ -123,7 +123,7 @@ public class playerMovementRefactorized : MonoBehaviour {
     public float dropThroughDuration = 0.25f;
     public bool treatOneWayAsGround = true;
 
-    // Supresión de input a pared tras wall-jump
+    // Supresiï¿½n de input a pared tras wall-jump
     [Header("Wall Input Suppress")]
     [Tooltip("Tiempo que se ignora el input hacia la pared tras saltar presionando contra ella.")]
     public float wallInputSuppressTime = 0.4f;
@@ -187,13 +187,13 @@ public class playerMovementRefactorized : MonoBehaviour {
     private float wallInputSuppressTimer = 0f;
     private WallSide suppressedWallSide = WallSide.None;
 
-    // Fall ramp context (cambiar gravedad en caída según origen)
+    // Fall ramp context (cambiar gravedad en caï¿½da segï¿½n origen)
     private enum FallRampContext { None, FromJump, FromDash }
     private FallRampContext fallContext = FallRampContext.None;
 
     private bool executedJumpThisFrame = false;
 
-    // Velocidad base dinámica en suelo + apex mults
+    // Velocidad base dinï¿½mica en suelo + apex mults
     private float currentRunSpeed;
     private float apexSpeedMultNow = 1f;
     private float apexAccelMultNow = 1f;
@@ -216,10 +216,10 @@ public class playerMovementRefactorized : MonoBehaviour {
     //       SMALL HELPERS
     // ===========================
 
-    // ¿Se permite agarrarse a pared ahora? (ej: solo si cayendo)
+    // ï¿½Se permite agarrarse a pared ahora? (ej: solo si cayendo)
     private bool CanWallAttachNow() {
         if (!requireFallingForWallGrab) return true;
-        return rb != null && rb.velocity.y <= wallGrabFallVyThreshold;
+        return rb != null && rb.linearVelocity.y <= wallGrabFallVyThreshold;
     }
 
     // Raycast detallado a pared (respeta layer y fallback por tag)
@@ -247,7 +247,7 @@ public class playerMovementRefactorized : MonoBehaviour {
         wallJumpLockTimer = 0f;
     }
 
-    // Intención de drop (S presionado)
+    // Intenciï¿½n de drop (S presionado)
     private static bool IsDropIntent() => Input.GetKey(KeyCode.S);
 
     // ===========================
@@ -313,7 +313,7 @@ public class playerMovementRefactorized : MonoBehaviour {
         bool jumpUp = Input.GetKeyUp(jumpKey);
         jumpHeld = Input.GetKey(jumpKey);
 
-        // Cancelación del downward dash con salto
+        // Cancelaciï¿½n del downward dash con salto
         if (isDownwardHoldDash && jumpDown) {
             cancelDownwardDashQueued = true;
         }
@@ -331,12 +331,12 @@ public class playerMovementRefactorized : MonoBehaviour {
             if (jumpDown) {
                 bool sHeld = IsDropIntent();
 
-                // Buffer normal: NO lo armamos si estás dashing o si S está presionado en aire
+                // Buffer normal: NO lo armamos si estï¿½s dashing o si S estï¿½ presionado en aire
                 if (!isDashing && (!sHeld || isOnWall || isGrounded)) {
                     jumpBufferTimer = jumpBufferTime;
                 }
 
-                // Buffer para saltar al terminar el dash: SOLO si estás dashing
+                // Buffer para saltar al terminar el dash: SOLO si estï¿½s dashing
                 if (isDashing && enableDashJumpBuffer) {
                     if (!sHeld || isOnWall || isGrounded) dashJumpBufferTimer = dashJumpBufferTime;
                 }
@@ -383,7 +383,7 @@ public class playerMovementRefactorized : MonoBehaviour {
     }
 
     private void FixedUpdate() {
-        // El dash mueve por corrutina; acá solo aplicamos física normal
+        // El dash mueve por corrutina; acï¿½ solo aplicamos fï¿½sica normal
         if (isDashing) return;
 
         float dt = Time.fixedDeltaTime;
@@ -398,20 +398,20 @@ public class playerMovementRefactorized : MonoBehaviour {
 
         // Control horizontal con lock tras wall-jump
         if (wallJumpLockTimer > 0f) {
-            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+            rb.linearVelocity = new Vector2(currentVelX, rb.linearVelocity.y);
         }
         else if (isGrounded || moveDir != 0) {
             currentVelX = Mathf.MoveTowards(currentVelX, targetSpeed, accelWithApex * dt);
-            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+            rb.linearVelocity = new Vector2(currentVelX, rb.linearVelocity.y);
         }
         else {
             currentVelX = Mathf.MoveTowards(currentVelX, 0f, airDrag * dt);
-            rb.velocity = new Vector2(currentVelX, rb.velocity.y);
+            rb.linearVelocity = new Vector2(currentVelX, rb.linearVelocity.y);
         }
 
-        // Wall-grab (pegado estático)
+        // Wall-grab (pegado estï¿½tico)
         if (isWallGrabbing && !isWallSliding && !dropBlockWallGrabActive) {
-            rb.velocity = Vector2.zero;
+            rb.linearVelocity = Vector2.zero;
         }
 
         // Altura adicional por hold
@@ -435,13 +435,13 @@ public class playerMovementRefactorized : MonoBehaviour {
         // Durante lock no se actualiza input horizontal
         if (wallJumpLockTimer > 0f) return;
 
-        // Resolver conflicto A+D por "última tecla" (lastPressedDir)
+        // Resolver conflicto A+D por "ï¿½ltima tecla" (lastPressedDir)
         if (leftHeld && rightHeld) moveDir = lastPressedDir;
         else if (leftHeld) moveDir = -1;
         else if (rightHeld) moveDir = 1;
         else moveDir = 0;
 
-        // Supresión del input hacia la pared tras wall-jump
+        // Supresiï¿½n del input hacia la pared tras wall-jump
         if (wallInputSuppressTimer > 0f && suppressedWallSide != WallSide.None) {
             if (suppressedWallSide == WallSide.Left && leftHeld) {
                 moveDir = rightHeld ? 1 : 0;
@@ -450,7 +450,7 @@ public class playerMovementRefactorized : MonoBehaviour {
                 moveDir = leftHeld ? -1 : 0;
             }
 
-            // Si ambas teclas y la suprimida coincide con la última, invierte
+            // Si ambas teclas y la suprimida coincide con la ï¿½ltima, invierte
             if (leftHeld && rightHeld) {
                 if (suppressedWallSide == WallSide.Left && lastPressedDir < 0) moveDir = 1;
                 if (suppressedWallSide == WallSide.Right && lastPressedDir > 0) moveDir = -1;
@@ -493,17 +493,17 @@ public class playerMovementRefactorized : MonoBehaviour {
     private bool CheckGroundRayAt(Vector2 localOffset) {
         Vector2 origin = (Vector2)transform.position + localOffset;
 
-        // 1) Con máscara
+        // 1) Con mï¿½scara
         RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, groundRayLength, groundMask);
         if (hit.collider != null) {
-            // Ignora la one-way que estás atravesando ahora mismo
+            // Ignora la one-way que estï¿½s atravesando ahora mismo
             if (!(dropThroughActive && IsSameCollider(hit.collider, dropThroughCollider))) {
                 lastGroundCollider = hit.collider;
                 return true;
             }
         }
 
-        // 2) Sin máscara: acepta por tag de suelo o por one-way (si se trata como suelo)
+        // 2) Sin mï¿½scara: acepta por tag de suelo o por one-way (si se trata como suelo)
         RaycastHit2D hitNoMask = Physics2D.Raycast(origin, Vector2.down, groundRayLength);
         if (hitNoMask.collider != null) {
             Collider2D c = hitNoMask.collider;
@@ -555,7 +555,7 @@ public class playerMovementRefactorized : MonoBehaviour {
             ? (leftHitRecentTimer > 0f && rightHitRecentTimer > 0f)
             : bothSidesHitInstant;
 
-        // Resolución del lado de pared preferido
+        // Resoluciï¿½n del lado de pared preferido
         WallSide newSide = WallSide.None;
         if (left && !right) newSide = WallSide.Left;
         else if (right && !left) newSide = WallSide.Right;
@@ -649,7 +649,7 @@ public class playerMovementRefactorized : MonoBehaviour {
 
         bool canGroundLikeJumpNow = isGrounded || (coyoteTimer > 0f);
 
-        // Consumir buffer normal en el primer frame válido
+        // Consumir buffer normal en el primer frame vï¿½lido
         if (jumpBufferTimer > 0f && canGroundLikeJumpNow) {
             DoGroundLikeJump();
             jumpBufferTimer = 0f;
@@ -657,7 +657,7 @@ public class playerMovementRefactorized : MonoBehaviour {
             return;
         }
 
-        // Salto inmediato por pulsación
+        // Salto inmediato por pulsaciï¿½n
         if (jumpDown) {
             if (canGroundLikeJumpNow) {
                 jumpBufferTimer = 0f;
@@ -678,10 +678,10 @@ public class playerMovementRefactorized : MonoBehaviour {
         }
     }
 
-    // Helper común para iniciar un salto (ground-like o doble)
+    // Helper comï¿½n para iniciar un salto (ground-like o doble)
     private void BeginJumpCommon(bool consumeDoubleJump) {
         // Resetear vertical, salir de pared, marcar contexto
-        rb.velocity = new Vector2(rb.velocity.x, 0f);
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
         ResetVerticalStateAndExitWalls();
         fallContext = FallRampContext.FromJump;
 
@@ -690,7 +690,7 @@ public class playerMovementRefactorized : MonoBehaviour {
             canDoubleJump = false;
         }
 
-        // Cálculo de impulso inicial y fase de hold (igual que antes)
+        // Cï¿½lculo de impulso inicial y fase de hold (igual que antes)
         float riseScale = Mathf.Sqrt(Mathf.Max(0.01f, riseGravityMultiplier));
         float initialImpulse = jumpMinForce * riseScale;
         rb.AddForce(Vector2.up * initialImpulse, ForceMode2D.Impulse);
@@ -715,7 +715,7 @@ public class playerMovementRefactorized : MonoBehaviour {
 
     // Salto EXTRA al cancelar downward dash (no-hold, no consume doble)
     private void DoDownwardCancelJump() {
-        rb.velocity = new Vector2(rb.velocity.x, 0f);
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
         ResetVerticalStateAndExitWalls();
         fallContext = FallRampContext.FromJump;
 
@@ -728,11 +728,11 @@ public class playerMovementRefactorized : MonoBehaviour {
     }
 
     private void DoWallJump() {
-        // Guardar lado y calcular dirección de salida
+        // Guardar lado y calcular direcciï¿½n de salida
         WallSide prevWallSide = wallSide;
         int away = (prevWallSide == WallSide.Right) ? -1 : +1;
 
-        // ¿mantenía input hacia pared?
+        // ï¿½mantenï¿½a input hacia pared?
         bool towardWall = (prevWallSide == WallSide.Left && Input.GetKey(KeyCode.A))
                        || (prevWallSide == WallSide.Right && Input.GetKey(KeyCode.D));
 
@@ -741,12 +741,12 @@ public class playerMovementRefactorized : MonoBehaviour {
         float launchX = wallJumpHorizontalLaunchSpeed * (inputOpposite ? wallJumpOppositeMultiplier : 1f);
 
         // Reset y lanzamiento
-        rb.velocity = Vector2.zero;
+        rb.linearVelocity = Vector2.zero;
         ResetVerticalStateAndExitWalls();
         fallContext = FallRampContext.FromJump;
 
         currentVelX = away * launchX;
-        rb.velocity = new Vector2(currentVelX, 0f);
+        rb.linearVelocity = new Vector2(currentVelX, 0f);
         rb.AddForce(Vector2.up * wallJumpVerticalForce, ForceMode2D.Impulse);
 
         // Arranca fase de hold como en un salto normal
@@ -763,7 +763,7 @@ public class playerMovementRefactorized : MonoBehaviour {
         wallJumpLockTimer = Mathf.Max(0f, wallJumpLockTime);
         wallRegrabTimer = wallRegrabCooldown;
 
-        // Supresión de input hacia pared si correspondía
+        // Supresiï¿½n de input hacia pared si correspondï¿½a
         if (towardWall) {
             suppressedWallSide = prevWallSide;
             wallInputSuppressTimer = Mathf.Max(0f, wallInputSuppressTime);
@@ -779,7 +779,7 @@ public class playerMovementRefactorized : MonoBehaviour {
     private void ApplyJumpHoldBoostInFixed() {
         // Solo aplicamos mientras subimos y hay carga restante
         if (!isJumpingHoldPhase) return;
-        if (!jumpHeld || jumpHoldTimer >= jumpMaxChargeTime || jumpExtraImpulseLeft <= 0f || rb.velocity.y <= 0f) {
+        if (!jumpHeld || jumpHoldTimer >= jumpMaxChargeTime || jumpExtraImpulseLeft <= 0f || rb.linearVelocity.y <= 0f) {
             isJumpingHoldPhase = false;
             return;
         }
@@ -797,29 +797,29 @@ public class playerMovementRefactorized : MonoBehaviour {
     }
 
     private void ApplyMarioStyleGravities() {
-        // Excepciones: downward-hold dash gestiona su caída aparte
+        // Excepciones: downward-hold dash gestiona su caï¿½da aparte
         if (isDownwardHoldDash) return;
 
         // Slam legacy
         if (isSlamming) {
             float multiplier = fallGravityMultiplier * Mathf.Max(0f, 6f);
-            rb.velocity += Vector2.up * Physics2D.gravity.y * multiplier * Time.fixedDeltaTime;
+            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * multiplier * Time.fixedDeltaTime;
             return;
         }
 
         // Wall-slide con gravedad reducida
         if (isWallSliding) {
             float mult = Mathf.Max(0f, wallSlideGravityMultiplier);
-            rb.velocity += Vector2.up * Physics2D.gravity.y * mult * Time.fixedDeltaTime;
+            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * mult * Time.fixedDeltaTime;
             return;
         }
 
-        // Caída con rampa (FromJump o FromDash)
-        if (rb.velocity.y < 0f) {
+        // Caï¿½da con rampa (FromJump o FromDash)
+        if (rb.linearVelocity.y < 0f) {
             if (!wasFalling) {
                 wasFalling = true;
                 fallTimer = 0f;
-                rb.velocity = new Vector2(rb.velocity.x, 0f);
+                rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
             }
             else {
                 fallTimer += Time.fixedDeltaTime;
@@ -829,13 +829,13 @@ public class playerMovementRefactorized : MonoBehaviour {
             float t = (activeRamp > 0f) ? Mathf.Clamp01(fallTimer / activeRamp) : 1f;
             float currentMultiplier = Mathf.Lerp(1f, fallGravityMultiplier, t);
 
-            rb.velocity += Vector2.up * Physics2D.gravity.y * currentMultiplier * Time.fixedDeltaTime;
+            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * currentMultiplier * Time.fixedDeltaTime;
         }
         else {
             // Subida: aplicar rise gravity
             wasFalling = false;
-            if (rb.velocity.y > 0f) {
-                rb.velocity += Vector2.up * Physics2D.gravity.y * riseGravityMultiplier * Time.fixedDeltaTime;
+            if (rb.linearVelocity.y > 0f) {
+                rb.linearVelocity += Vector2.up * Physics2D.gravity.y * riseGravityMultiplier * Time.fixedDeltaTime;
             }
         }
     }
@@ -843,7 +843,7 @@ public class playerMovementRefactorized : MonoBehaviour {
     //            DASH
     // ===========================
 
-    // Distancia segura permitida (cast contra colisión, con skin)
+    // Distancia segura permitida (cast contra colisiï¿½n, con skin)
     private float ComputeDashAllowedDistance(Vector2 dir) {
         if (dir.sqrMagnitude <= 0f) return 0f;
 
@@ -862,7 +862,7 @@ public class playerMovementRefactorized : MonoBehaviour {
             var h = hits[i];
             if (h.collider == null) continue;
 
-            // Si vamos hacia arriba, ignorar OneWay como obstáculo
+            // Si vamos hacia arriba, ignorar OneWay como obstï¿½culo
             if (dir.y > 0f && IsOneWayPlatform(h.collider)) continue;
 
             if (h.distance < minHitDist) {
@@ -879,7 +879,7 @@ public class playerMovementRefactorized : MonoBehaviour {
     private bool TryConsumeDashJumpBuffer() {
         if (!enableDashJumpBuffer || dashJumpBufferTimer <= 0f) return false;
 
-        // Si estás sobre OneWay e intentando drop (S), no consumas
+        // Si estï¿½s sobre OneWay e intentando drop (S), no consumas
         if (isGrounded && IsDropIntent() && IsOneWayPlatform(lastGroundCollider)) return false;
 
         dashJumpBufferTimer = 0f;
@@ -904,7 +904,7 @@ public class playerMovementRefactorized : MonoBehaviour {
         Vector2 dir;
 
         if (isGrounded) {
-            // En suelo: solo horizontal. Si no hay input, usa la orientación actual.
+            // En suelo: solo horizontal. Si no hay input, usa la orientaciï¿½n actual.
             bool left = Input.GetKey(KeyCode.A);
             bool right = Input.GetKey(KeyCode.D);
             bool up = Input.GetKey(KeyCode.W);
@@ -967,7 +967,7 @@ public class playerMovementRefactorized : MonoBehaviour {
         WaitForFixedUpdate wait = new WaitForFixedUpdate();
 
         while (true) {
-            // Cancelación manual con Space
+            // Cancelaciï¿½n manual con Space
             if (cancelDownwardDashQueued) {
                 cancelDownwardDashQueued = false;
                 isDownwardHoldDash = false;
@@ -984,7 +984,7 @@ public class playerMovementRefactorized : MonoBehaviour {
             float dt = Time.fixedDeltaTime;
             float step = speed * dt;
 
-            // Cast frontal para parar con skin al tocar suelo/obstáculo
+            // Cast frontal para parar con skin al tocar suelo/obstï¿½culo
             RaycastHit2D[] hits = new RaycastHit2D[8];
             int count = col.Cast(dashDir, filter, hits, step + dashWallSafeDistance);
             bool willHit = false;
@@ -1033,8 +1033,8 @@ public class playerMovementRefactorized : MonoBehaviour {
         float originalGravity = rb.gravityScale;
         rb.gravityScale = 0f;
 
-        Vector2 originalVel = rb.velocity;
-        rb.velocity = Vector2.zero;
+        Vector2 originalVel = rb.linearVelocity;
+        rb.linearVelocity = Vector2.zero;
 
         Vector2 targetPos = rb.position + dashDir * allowedDistance;
 
@@ -1060,7 +1060,7 @@ public class playerMovementRefactorized : MonoBehaviour {
         rb.gravityScale = originalGravity;
 
         // Recupera velocidad horizontal "natural" al terminar
-        rb.velocity = new Vector2(currentVelX, 0f);
+        rb.linearVelocity = new Vector2(currentVelX, 0f);
         wasFalling = false;
         fallTimer = 0f;
         fallContext = FallRampContext.FromDash;
@@ -1120,7 +1120,7 @@ public class playerMovementRefactorized : MonoBehaviour {
     // ===========================
 
     private void UpdateApexMultipliers() {
-        float vy = rb.velocity.y;
+        float vy = rb.linearVelocity.y;
         float thr = Mathf.Max(0.0001f, apexVyThreshold);
         float nearApex01 = 1f - Mathf.Clamp01(Mathf.Abs(vy) / thr);
 
@@ -1191,27 +1191,27 @@ public class playerMovementRefactorized : MonoBehaviour {
         // Bloquea wall-grab mientras atraviesas el volumen
         dropBlockWallGrabActive = true;
 
-        // Ignora colisión con esa plataforma un rato
+        // Ignora colisiï¿½n con esa plataforma un rato
         Physics2D.IgnoreCollision(col, platform, true);
 
-        // Forzamos “salir de suelo” y empuje leve hacia abajo
+        // Forzamos ï¿½salir de sueloï¿½ y empuje leve hacia abajo
         isGrounded = false;
-        rb.velocity = new Vector2(rb.velocity.x, Mathf.Min(rb.velocity.y, -0.1f));
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, Mathf.Min(rb.linearVelocity.y, -0.1f));
 
-        // Espera duración real del drop
+        // Espera duraciï¿½n real del drop
         float t = 0f;
         while (t < duration) {
             t += Time.deltaTime;
             yield return null;
         }
 
-        // Reactiva colisión
+        // Reactiva colisiï¿½n
         Physics2D.IgnoreCollision(col, platform, false);
 
         // Fin del bloqueo de wall-grab
         dropBlockWallGrabActive = false;
 
-        // Pequeña tolerancia para que el raycast no la detecte inmediatamente
+        // Pequeï¿½a tolerancia para que el raycast no la detecte inmediatamente
         dropThroughTimer = 0.05f;
         dropThroughActive = true;
         dropThroughCollider = platform;
