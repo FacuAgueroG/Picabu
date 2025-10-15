@@ -85,7 +85,6 @@ public class simpleGravity2D : MonoBehaviour {
             else {
                 fallTimer += Time.fixedDeltaTime;
                 float t = Mathf.Clamp01(fallTimer / fallRampTime);
-                // Ease-in muy simple (t^2) para que se note el “peso” sin ser brusco
                 float eased = t * t;
                 rb.gravityScale = Mathf.Lerp(downGravityScaleStart, downGravityScaleMax, eased);
             }
@@ -98,7 +97,6 @@ public class simpleGravity2D : MonoBehaviour {
         }
         else // v.y ≈ 0 (ápice)
         {
-            // Usemos la gravedad de subida como base mientras “flota” en 0
             rb.gravityScale = upGravityScale;
         }
 

@@ -12,17 +12,16 @@ public class simpleControls : MonoBehaviour {
     public KeyCode jump = KeyCode.Space;
     public KeyCode dash = KeyCode.LeftShift;
 
-    [Header("Ataque (nuevo)")]
-    public KeyCode attack = KeyCode.S;
+    [Header("Ataques")]
+    public KeyCode attackS = KeyCode.S; // Ligero (circular)
+    public KeyCode attackD = KeyCode.D; // Rectangular (frente/atrás)
 
-    // Devuelve -1, 0 o +1 (muy simple)
+    // Eje horizontal muy simple
     public int MoveAxis() {
         if (blockInput) return 0;
-
         bool l = Input.GetKey(leftAlt);
         bool r = Input.GetKey(rightAlt);
-
-        if (l == r) return 0; // ninguno o ambos
+        if (l == r) return 0;
         return r ? 1 : -1;
     }
 
@@ -32,6 +31,10 @@ public class simpleControls : MonoBehaviour {
     public bool JumpDown() => !blockInput && Input.GetKeyDown(jump);
     public bool DashDown() => !blockInput && Input.GetKeyDown(dash);
 
-    // Nuevo:
-    public bool AttackDown() => !blockInput && Input.GetKeyDown(attack);
+    // Ataques
+    public bool AttackSDown() => !blockInput && Input.GetKeyDown(attackS);
+    public bool AttackSHeld() => !blockInput && Input.GetKey(attackS);
+    public bool AttackSUp() => !blockInput && Input.GetKeyUp(attackS);
+
+    public bool AttackDDown() => !blockInput && Input.GetKeyDown(attackD);
 }

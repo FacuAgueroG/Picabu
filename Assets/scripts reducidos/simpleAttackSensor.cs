@@ -3,44 +3,36 @@ using System.Collections.Generic;
 
 public class simpleAttackSensor : MonoBehaviour {
     [Header("Collider objetivo (externo)")]
-    [Tooltip("Asigna aquí el Circle/Square Collider2D del hijo (p.ej. 'Circle').")]
-    public Collider2D targetCollider;   // <- asigna el collider del hijo
+    [Tooltip("El collider del hitbox que se enciende/apaga (Circle/Box).")]
+    public Collider2D targetCollider;
 
     [Header("Filtro de enemigos")]
-    public LayerMask enemyLayers;       // recomendado
-    public string enemyTag = "Enemy";   // opcional (vacío para ignorar tag)
+    public LayerMask enemyLayers;
+    public string enemyTag = "Enemy";
 
-    // Estado de ventana
+    // Estado ventana
     bool windowOpen = false;
+    AttackEffectKind currentEffect = AttackEffectKind.None;
     readonly HashSet<Transform> hitThisWindow = new HashSet<Transform>();
-
-    // Buffer reutilizable para Overlap (evita allocs)
     static readonly Collider2D[] _overlapBuffer = new Collider2D[32];
 
     void Awake() {
-        if (targetCollider == null) {
-            // Intento auto-detectar en hijos por si te olvidás de asignar
-            targetCollider = GetComponentInChildren<Collider2D>(true);
-        }
-
         if (targetCollider == null)
-            Debug.LogWarning("[simpleAttackSensor2D] Falta 'targetCollider' asignado.");
-        else
-            targetCollider.isTrigger = true; // por si acaso
+            targetCollider = GetComponentInChildren<Collider2D>(true);
+        if (targetCollider != null) targetCollider.isTrigger = true;
     }
 
-    // Llamado por simpleAttackArea2D
-    public void BeginWindow() {
+    public void BeginWindow(AttackEffectKind effectKind) {
+        currentEffect = effectKind;
         hitThisWindow.Clear();
         windowOpen = true;
-
-        // Escaneo inmediato por si ya hay algo dentro al habilitar
         ScanOnce();
     }
 
     public void EndWindow() {
         windowOpen = false;
         hitThisWindow.Clear();
+        currentEffect = AttackEffectKind.None;
     }
 
     void FixedUpdate() {
@@ -51,15 +43,22 @@ public class simpleAttackSensor : MonoBehaviour {
     void ScanOnce() {
         if (targetCollider == null || !targetCollider.enabled) return;
 
-        // Filtro
-        ContactFilter2D filter = ContactFilter2D.noFilter;
-        if (enemyLayers.value != 0) filter.SetLayerMask(enemyLayers);
+        // Filtro robusto
+        ContactFilter2D filter = new ContactFilter2D();
         filter.useTriggers = true;
+
+        if (enemyLayers.value != 0) {
+            filter.SetLayerMask(enemyLayers);
+            filter.useLayerMask = true;
+        }
+        else {
+            filter.useLayerMask = false;
+        }
 
         int count = targetCollider.Overlap(filter, _overlapBuffer);
         for (int i = 0; i < count && i < _overlapBuffer.Length; i++) {
             var other = _overlapBuffer[i];
-            _overlapBuffer[i] = null; // limpiar (opcional)
+            _overlapBuffer[i] = null;
             TryHit(other);
         }
     }
@@ -71,17 +70,16 @@ public class simpleAttackSensor : MonoBehaviour {
     }
 
     void TryHit(Collider2D other) {
-        if (other == null) return;
-        if (!IsEnemy(other.gameObject)) return;
+        if (other == null || !IsEnemy(other.gameObject)) return;
 
-        var receiver = other.GetComponentInParent<simpleLaunch>();
-        if (receiver == null) return;
-
-        var key = receiver.transform;
+        var key = other.transform;
         if (hitThisWindow.Contains(key)) return;
-
         hitThisWindow.Add(key);
-        receiver.ReceiveLaunch();
-        Debug.Log("Golpe (launch) a: " + receiver.name);
+
+        if (currentEffect == AttackEffectKind.Launch) {
+            var receiver = other.GetComponentInParent<simpleLaunch>();
+            if (receiver != null) receiver.ReceiveLaunch();
+        }
+        // Aquí podrías añadir daño/poise para currentEffect == None si quieres.
     }
 }

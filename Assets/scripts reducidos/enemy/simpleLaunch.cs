@@ -10,14 +10,9 @@ public class simpleLaunch : MonoBehaviour {
         rb = GetComponent<Rigidbody2D>();
     }
 
-    // Llamado por el Player cuando detecta el golpe
     public void ReceiveLaunch() {
-        // Reiniciar velocidad previa para consistencia
         rb.linearVelocity = Vector2.zero;
-
-        // Lanzamiento vertical simple
         rb.AddForce(Vector2.up * launchForce, ForceMode2D.Impulse);
-
-        Debug.Log("Enemy " + name + " lanzado al aire con fuerza " + launchForce);
+        // Debug.Log("Enemy " + name + " lanzado al aire con fuerza " + launchForce);
     }
 }
