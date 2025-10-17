@@ -3,234 +3,312 @@
 public class simpleCombatController : MonoBehaviour {
     [Header("Referencias")]
     public simpleControls controls;
-    [Tooltip("Área S (circular): simpleAttack + simpleAttackSensor + collider + sprite")]
     public simpleAttack attackSArea;
-    [Tooltip("Área D (rectángulo fino): simpleAttack + simpleAttackSensor + collider + sprite")]
     public simpleAttack attackDArea;
+    public simpleGround2D ground;
+    public simpleAirStall airStall;
 
-    [Header("Combo S")]
+    [Header("Combo S (base)")]
     [Tooltip("Tiempo máx entre S válidas para no resetear el combo.")]
     public float comboWindowS = 0.50f;
-    [Tooltip("Tiempo que debes mantener S para entrar a HOLD (solo si ya estás en S3+).")]
+    [Tooltip("Tiempo que debes mantener S para entrar a HOLD (solo S3+).")]
     public float holdTimeS = 0.25f;
 
-    [Header("Permisividad (S)")]
-    [Tooltip("Ventana de buffer para S (si SDown ocurre mientras S está ocupado/en CD).")]
-    public float inputBufferS = 0.14f;            // 140ms: captura SDown temprano durante CD/ocupado
-    [Tooltip("Gracia de ‘tarde’ para mantener combo aunque la ventana haya expirado por poco.")]
-    public float lateGraceS = 0.10f;              // 100ms: acepta un SDown apenas tarde sin romper combo
-    [Tooltip("Bloqueo corto tras consumir el buffer para evitar doble disparo/race.")]
-    public float postConsumeLockoutS = 0.05f;     // 50ms
+    // ================= Buffer S (configurable) =================
+    public enum SBufferMode { FullCooldown, TailOnly }
 
-    // Estado interno combo/hold S
-    int sCount = 0;                 // 0=base; 1=S1; 2=S2; 3+=S3...
-    float lastSValidTime = -999f;   // tiempo última S válida (que encendió ventana)
-    bool tryingToHold = false;      // midiendo “mantener S”
+    [Header("Buffer S (en cooldown)")]
+    [Tooltip("Modo de apertura del buffer mientras S está en cooldown.")]
+    public SBufferMode sBufferMode = SBufferMode.FullCooldown;
+
+    [Tooltip("Si el modo es TailOnly, el buffer se abre solo en los últimos Xs del CD.")]
+    public float bufferTailSeconds = 0.12f;      // 120 ms
+
+    [Tooltip("Validez del buffer una vez termina el CD.")]
+    public float bufferExpireAfterCd = 0.12f;    // 120 ms
+
+    [Header("Buffer S (cola de animación)")]
+    [Tooltip("Durante IsActive, si faltan <= Xs para terminar, se permite buffer al CD siguiente.")]
+    public float activeTailBufferSeconds = 0.09f; // 90 ms (punto de partida)
+
+    // ================= Air-stall con modificador =================
+    [Header("Air-stall (con Left Ctrl)")]
+    [Tooltip("Duración del stall vertical en ms (cuando se sostiene Left Ctrl en el aire).")]
+    public float stallMs = 110f;
+    [Tooltip("Máximo de stalls durante una misma secuencia aérea (entre tocar suelos).")]
+    public int maxAirStallsPerAirSequence = 3;
+
+    // ================= D durante/antes de HOLD (robustez) =================
+    [Header("D + HOLD")]
+    [Tooltip("Si D se pulsa en HOLD y D no está libre, se bufferiza sin cortar el HOLD.")]
+    public bool bufferDWhileHold = true;
+    [Tooltip("Ventana de espera para disparar D cuando quede libre (si se pulsó en HOLD).")]
+    public float dWhileHoldBufferWindow = 0.18f; // 180 ms
+
+    [Tooltip("Si D se pulsa MIENTRAS se está 'preparando' el HOLD (tryingToHold), se bufferiza y se consume al entrar en HOLD.")]
+    public bool bufferDPreHold = true;
+    [Tooltip("Ventana máx para que ese D buffered se consuma al entrar en HOLD.")]
+    public float dPreHoldBufferWindow = 0.35f; // >= holdTimeS + margen
+
+    // ----- Estado S / combo -----
+    int sCount = 0;
+    float lastSValidTime = -999f;
+
+    // HOLD
+    bool tryingToHold = false;
     float holdPressStartTime = -1f;
 
-    // Estado del buffer S
+    // Buffer S
     bool hasBufferedS = false;
-    float bufferedSExpiresAt = -999f;   // Time.time en que el buffer deja de ser válido
-    float lastSDownTime = -999f;        // para late grace (marca el último Down real del usuario)
-    float postConsumeLockoutUntil = -999f;
+    float bufferedConsumeNotBefore = -999f; // no antes del fin de CD
+    float bufferedExpireAt = -999f;
+
+    // Secuencia aérea (para limitar stalls)
+    int stallsThisAirSeq = 0;
+    bool wasGroundedLastFrame = true;
+
+    // Buffer D mientras estamos en HOLD
+    bool hasBufferedDWhileHold = false;
+    float bufferedDWhileHoldExpireAt = -999f;
+
+    // Buffer D cuando todavía NO estamos en HOLD pero lo estamos preparando (tryingToHold)
+    bool hasBufferedDPreHold = false;
+    float bufferedDPreHoldExpireAt = -999f;
 
     void Reset() {
         controls = GetComponent<simpleControls>();
+        if (airStall == null) airStall = GetComponent<simpleAirStall>();
+    }
+
+    void Awake() {
+        if (airStall == null) airStall = GetComponent<simpleAirStall>();
     }
 
     void Update() {
         if (controls == null || attackSArea == null || attackDArea == null) return;
 
-        // 1) Expiración de combo por ventana (con "late grace" aplicada al siguiente Down)
-        if (!attackSArea.InHold && sCount > 0) {
+        // Track de aire/suelo para resetear contador de stalls
+        bool grounded = (ground != null) && ground.IsGrounded();
+        if (grounded && !wasGroundedLastFrame) {
+            stallsThisAirSeq = 0;
+        }
+        wasGroundedLastFrame = grounded;
+
+        HandleSInput(grounded);
+        HandleDInput(grounded);
+
+        // Ventana de combo: NO resetees si estamos intentando holdear (S3+ sosteniendo)
+        if (sCount > 0 && !attackSArea.InHold) {
             float dt = Time.time - lastSValidTime;
-            if (dt > comboWindowS + lateGraceS) {
-                // Ventana + gracia definitivamente expiradas.
+            bool guardingForHold = tryingToHold && controls.AttackSHeld();
+            if (!guardingForHold && dt > comboWindowS) {
                 ResetSCombo();
             }
-            // Nota: si dt está entre (comboWindowS, comboWindowS + lateGraceS],
-            // NO reseteamos aún; decidimos al procesar el próximo SDown real.
         }
 
-        HandleDInput();
-        HandleSInputAndHold();   // procesa SDown reales y HOLD
-        TryConsumeSBuffer();     // si S quedó en buffer y ahora está libre, lo consume como KeyDown virtual
-    }
+        TryConsumeSBufferIfReady();
+        TryConsumeDPreHoldBufferIfReady();
+        TryConsumeDWhileHoldBufferIfReady();
 
-    // ===================== S (permisivo) =====================
-
-    void HandleSInputAndHold() {
-        bool sBusy = attackSArea.IsActiveOrCooling; // ocupado o en cooldown
-        bool sInHold = attackSArea.InHold;
-
-        // --- SDown real del usuario ---
-        if (controls.AttackSDown()) {
-            lastSDownTime = Time.time;
-
-            // Si NO estamos en HOLD y S no está disponible ahora, bufferizar
-            if (!sInHold && (sBusy || attackDArea.IsActive)) {
-                BufferS();
-            }
-            else {
-                // S disponible (no ocupado, no en HOLD, D no activo)
-                ProcessSDownWithLateGrace();
-            }
-        }
-
-        // --- Construcción de HOLD (se mide SIEMPRE desde el momento en que S disparó disponible) ---
-        // Requisito: estar en S3+ y NO estar en HOLD
-        if (!sInHold && sCount >= 3 && tryingToHold && controls.AttackSHeld()) {
-            // Si ya cumplimos tiempo de hold y S no está ocupado, entramos a HOLD
-            if ((Time.time - holdPressStartTime) >= holdTimeS && !attackSArea.IsActiveOrCooling) {
-                bool ok = attackSArea.StartHold();
-                if (ok) {
-                    // Quedamos en HOLD esperando D o que suelte S
-                }
-                tryingToHold = false; // dejamos de medir
-            }
-        }
-
-        // Salir de HOLD al soltar S
-        if (attackSArea.InHold && controls.AttackSUp()) {
+        // HOLD robusto: cancelar si deja de sostener
+        if (attackSArea.InHold && !controls.AttackSHeld()) {
             attackSArea.StopHold();
-            ResetSCombo();
         }
     }
 
-    // Procesa un SDown en el que S está disponible, aplicando "late grace" si corresponde
-    void ProcessSDownWithLateGrace() {
-        // Determinar si debemos resetear el combo por expiración SIN gracia
-        if (sCount > 0) {
-            float dt = Time.time - lastSValidTime;
+    // ===================== S =====================
 
-            if (dt > comboWindowS) {
-                // Se pasó la ventana normal: ¿entra en la gracia tarde?
-                if (dt <= comboWindowS + lateGraceS) {
-                    // Aceptamos este Down como parte del mismo combo (no reseteamos).
+    void HandleSInput(bool groundedNow) {
+        bool airborne = !groundedNow;
+
+        // --- Down ---
+        if (controls.AttackSDown()) {
+            // AIR STALL con modificador (independiente de quick/slow/HOLD)
+            if (airborne && controls.StallHeld() && stallsThisAirSeq < maxAirStallsPerAirSequence) {
+                if (airStall != null) {
+                    airStall.ApplyStall(stallMs);
+                    stallsThisAirSeq++;
+                }
+            }
+
+            // (A) Durante IsActive: permitir buffer SOLO en la cola de la animación
+            if (attackSArea.IsActive) {
+                float timeToActiveEnd = Mathf.Max(0f, attackSArea.ActiveUntil - Time.time);
+                if (timeToActiveEnd <= activeTailBufferSeconds) {
+                    // Buffer al fin de CD (igual que si lo hubieras apretado en CD)
+                    hasBufferedS = true;
+                    bufferedConsumeNotBefore = attackSArea.CooldownUntil; // no antes del fin de CD
+                    bufferedExpireAt = attackSArea.CooldownUntil + bufferExpireAfterCd;
+                }
+                // Si no estás en la cola, se ignora (no hay buffer en plena animación)
+                return;
+            }
+
+            // (B) Si está en cooldown: buffer según modo
+            if (attackSArea.InCooldown) {
+                float timeToCdEnd = Mathf.Max(0f, attackSArea.CooldownUntil - Time.time);
+                bool canOpen =
+                    (sBufferMode == SBufferMode.FullCooldown) ||
+                    (sBufferMode == SBufferMode.TailOnly && timeToCdEnd <= bufferTailSeconds);
+
+                if (canOpen) {
+                    hasBufferedS = true;
+                    bufferedConsumeNotBefore = attackSArea.CooldownUntil; // no antes del fin de CD
+                    bufferedExpireAt = attackSArea.CooldownUntil + bufferExpireAfterCd;
+                }
+                return;
+            }
+
+            // (C) Libre: dispara ya
+            if (attackSArea.FireOnce(AttackEffectKind.None)) {
+                lastSValidTime = Time.time;
+                sCount = Mathf.Max(1, sCount + 1);
+
+                // Intento HOLD desde S3+
+                if (sCount >= 3 && controls.AttackSHeld()) {
+                    tryingToHold = true;
+                    holdPressStartTime = Time.time;
                 }
                 else {
-                    // Ventana + gracia expiradas → reset
-                    ResetSCombo();
+                    tryingToHold = false;
+                    holdPressStartTime = -1f;
                 }
             }
         }
 
-        // Disparar S una vez
-        bool fired = attackSArea.FireOnce(AttackEffectKind.None);
-        if (fired) {
-            sCount = Mathf.Min(sCount + 1, 999);
-            lastSValidTime = Time.time;
+        // --- Held: HOLD desde S3+ (si sostiene lo suficiente) ---
+        if (tryingToHold && controls.AttackSHeld() &&
+            (Time.time - holdPressStartTime) >= holdTimeS) {
+            if (!attackSArea.IsActiveOrCooling && !attackSArea.InHold) {
+                if (attackSArea.StartHold()) {
+                    // Si había D buffered "pre-hold", se consumirá al entrar al HOLD
+                }
+            }
+            tryingToHold = false; // consumimos el intento
+        }
 
-            // Si alcanzamos S3+ y el jugador mantiene S, empezamos a medir hold DESDE AHORA
-            if (sCount >= 3 && controls.AttackSHeld()) {
-                tryingToHold = true;
-                holdPressStartTime = Time.time; // <<< importante: medimos desde el disparo, no antes
-            }
-            else {
-                tryingToHold = false;
-                holdPressStartTime = -1f;
-            }
+        // Abortamos intento de HOLD si soltó antes del tiempo
+        if (!controls.AttackSHeld() && tryingToHold) {
+            tryingToHold = false;
+            holdPressStartTime = -1f;
         }
     }
 
-    void BufferS() {
-        hasBufferedS = true;
-        bufferedSExpiresAt = Time.time + inputBufferS;
-        // No armamos hold aquí; el hold se armará (si corresponde) al CONSUMIR el buffer.
-    }
-
-    void TryConsumeSBuffer() {
+    void TryConsumeSBufferIfReady() {
         if (!hasBufferedS) return;
 
-        // Requisitos para consumir: S libre (no ocupado ni en HOLD), D no activo, buffer vigente y sin lockout
-        bool sBusy = attackSArea.IsActiveOrCooling;
-        bool sInHold = attackSArea.InHold;
-        if (sBusy || sInHold || attackDArea.IsActive) return;
-
-        if (Time.time > bufferedSExpiresAt) {
-            // Venció el buffer → limpiar
+        // Requisitos: fin de CD alcanzado, dentro de validez, y S libre
+        if (Time.time >= bufferedConsumeNotBefore &&
+            Time.time <= bufferedExpireAt &&
+            !attackSArea.IsActiveOrCooling &&
+            !attackSArea.InHold &&
+            !attackDArea.IsActive) {
             hasBufferedS = false;
-            return;
-        }
+            if (attackSArea.FireOnce(AttackEffectKind.None)) {
+                lastSValidTime = Time.time;
+                sCount = Mathf.Max(1, sCount + 1);
 
-        if (Time.time < postConsumeLockoutUntil) {
-            // Estamos en pequeño lockout post-consumo
-            return;
-        }
-
-        // Consumir como "keydown virtual" en este frame
-        hasBufferedS = false;
-
-        // Aplicar late grace en el consumo también (misma lógica que ProcessSDownWithLateGrace)
-        if (sCount > 0) {
-            float dt = Time.time - lastSValidTime;
-            if (dt > comboWindowS) {
-                if (dt <= comboWindowS + lateGraceS) {
-                    // Aceptamos dentro de la gracia
-                }
-                else {
-                    ResetSCombo();
+                // Si el jugador está sosteniendo S y ya vamos por S3+, permitir HOLD
+                if (sCount >= 3 && controls.AttackSHeld()) {
+                    tryingToHold = true;
+                    holdPressStartTime = Time.time;
                 }
             }
         }
 
-        bool fired = attackSArea.FireOnce(AttackEffectKind.None);
-        if (fired) {
-            sCount = Mathf.Min(sCount + 1, 999);
-            lastSValidTime = Time.time;
-
-            // Regla acordada: si el botón sigue físicamente presionado, empezamos a medir HOLD DESDE EL CONSUMO
-            if (sCount >= 3 && controls.AttackSHeld()) {
-                tryingToHold = true;
-                holdPressStartTime = Time.time; // arranca medición ahora
-            }
-            else {
-                tryingToHold = false;
-                holdPressStartTime = -1f;
-            }
-        }
-
-        // Lockout corto para evitar dobles disparos por cambios de estado en el mismo frame
-        postConsumeLockoutUntil = Time.time + postConsumeLockoutS;
-    }
-
-    // ===================== D (sin cambios funcionales) =====================
-
-    void HandleDInput() {
-        if (controls.AttackDDown()) {
-            if (attackSArea.InHold) {
-                // EXCEPCIÓN: D durante S(HOLD) → apaga S y dispara D UNA vez con Launch
-                attackSArea.StopHold();
-                attackDArea.FireOnce(AttackEffectKind.Launch); // si D está en CD, simplemente no sale
-                ResetSCombo();
-
-                // Nota: no bufferizamos S mientras estamos en HOLD.
-                hasBufferedS = false;
-            }
-            else {
-                // D suelto: bloqueado si S está activo ahora mismo
-                if (!attackDArea.IsActiveOrCooling && !attackSArea.IsActive) {
-                    attackDArea.FireOnce(AttackEffectKind.None);
-                    // Cambiar de botón antes de S3 cancela S
-                    if (sCount < 3) ResetSCombo();
-                }
-            }
+        // Expiración del buffer
+        if (Time.time > bufferedExpireAt) {
+            hasBufferedS = false;
         }
     }
-
-    // ===================== Utils =====================
 
     void ResetSCombo() {
         sCount = 0;
         lastSValidTime = -999f;
+
+        hasBufferedS = false;
+        bufferedConsumeNotBefore = -999f;
+        bufferedExpireAt = -999f;
+
         tryingToHold = false;
         holdPressStartTime = -1f;
 
-        // Limpiar estados de buffer asociados
-        hasBufferedS = false;
-        bufferedSExpiresAt = -999f;
-        postConsumeLockoutUntil = -999f;
+        hasBufferedDWhileHold = false;
+        bufferedDWhileHoldExpireAt = -999f;
+        hasBufferedDPreHold = false;
+        bufferedDPreHoldExpireAt = -999f;
 
         if (attackSArea.InHold) attackSArea.StopHold();
+    }
+
+    // ===================== D (con buffer en HOLD y pre-HOLD) =====================
+
+    void HandleDInput(bool groundedNow) {
+        bool airborne = !groundedNow;
+
+        if (controls.AttackDDown()) {
+            // AIR STALL por modificador (si querés que D también pueda stallar)
+            if (airborne && controls.StallHeld() && stallsThisAirSeq < maxAirStallsPerAirSequence) {
+                if (airStall != null) {
+                    airStall.ApplyStall(stallMs);
+                    stallsThisAirSeq++;
+                }
+            }
+
+            if (attackSArea.InHold) {
+                if (bufferDWhileHold && (attackDArea.IsActiveOrCooling || !attackDArea.isActiveAndEnabled)) {
+                    hasBufferedDWhileHold = true;
+                    bufferedDWhileHoldExpireAt = Time.time + dWhileHoldBufferWindow;
+                }
+                else {
+                    attackSArea.StopHold();
+                    attackDArea.FireOnce(AttackEffectKind.Launch);
+                    ResetSCombo();
+                }
+            }
+            else {
+                if (bufferDPreHold && tryingToHold) {
+                    hasBufferedDPreHold = true;
+                    bufferedDPreHoldExpireAt = Time.time + dPreHoldBufferWindow;
+                    return;
+                }
+
+                if (!attackDArea.IsActiveOrCooling && !attackSArea.IsActive) {
+                    attackDArea.FireOnce(AttackEffectKind.None);
+                }
+            }
+        }
+    }
+
+    void TryConsumeDPreHoldBufferIfReady() {
+        if (!hasBufferedDPreHold) return;
+
+        if (Time.time > bufferedDPreHoldExpireAt) {
+            hasBufferedDPreHold = false;
+            return;
+        }
+
+        if (attackSArea.InHold) {
+            hasBufferedDPreHold = false;
+            attackSArea.StopHold();
+            attackDArea.FireOnce(AttackEffectKind.Launch);
+            ResetSCombo();
+        }
+    }
+
+    void TryConsumeDWhileHoldBufferIfReady() {
+        if (!hasBufferedDWhileHold) return;
+
+        if (!attackSArea.InHold || Time.time > bufferedDWhileHoldExpireAt) {
+            hasBufferedDWhileHold = false;
+            return;
+        }
+
+        if (!attackDArea.IsActiveOrCooling && attackDArea.isActiveAndEnabled) {
+            hasBufferedDWhileHold = false;
+            attackSArea.StopHold();
+            attackDArea.FireOnce(AttackEffectKind.Launch);
+            ResetSCombo();
+        }
     }
 }

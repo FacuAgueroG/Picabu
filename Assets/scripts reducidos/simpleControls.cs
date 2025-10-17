@@ -16,6 +16,10 @@ public class simpleControls : MonoBehaviour {
     public KeyCode attackS = KeyCode.S; // Ligero (circular)
     public KeyCode attackD = KeyCode.D; // Rectangular (frente/atrás)
 
+    [Header("Modificador (aire)")]
+    [Tooltip("Mantener para forzar air-stall en el aire al presionar S o D.")]
+    public KeyCode stallModifier = KeyCode.LeftControl;
+
     // Eje horizontal muy simple
     public int MoveAxis() {
         if (blockInput) return 0;
@@ -37,4 +41,7 @@ public class simpleControls : MonoBehaviour {
     public bool AttackSUp() => !blockInput && Input.GetKeyUp(attackS);
 
     public bool AttackDDown() => !blockInput && Input.GetKeyDown(attackD);
+
+    // Modificador de air-stall
+    public bool StallHeld() => !blockInput && Input.GetKey(stallModifier);
 }

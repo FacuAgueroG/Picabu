@@ -5,80 +5,80 @@ public class simpleGravity2D : MonoBehaviour {
     public simpleControls controls;    // Para leer JumpHeld()
     Rigidbody2D rb;
 
+    [Header("Integración opcional")]
+    [Tooltip("Si se referencia, la gravedad respetará stalls verticales.")]
+    public simpleAirStall airStall;    // (opcional)
+
     [Header("Gravedades")]
-    [Tooltip("Gravedad mientras SUBE (más chico = sube más fácil)")]
     public float upGravityScale = 1.0f;
-
-    [Tooltip("Gravedad base al comenzar la CAÍDA")]
     public float downGravityScaleStart = 2.0f;
-
-    [Tooltip("Gravedad tope al final de la rampa de CAÍDA")]
     public float downGravityScaleMax = 4.0f;
 
-    [Header("Rampa de caída (sensación de peso)")]
-    [Tooltip("Tiempo que tarda en pasar de Start a Max (segundos)")]
-    public float fallRampTime = 0.20f;   // 200 ms suele sentirse bien
+    [Header("Rampa de caída")]
+    public float fallRampTime = 0.20f;
 
     [Header("Corte de salto al soltar (en SUBIDA)")]
     public bool hardCutOnRelease = true;
-    [Tooltip("Tras soltar, límite superior para la Y (0 para cortar al instante)")]
     public float cutUpwardSpeed = 0f;
-    [Tooltip("Empujón hacia abajo al soltar (0 = desactivado)")]
     public float fallKickSpeed = 0f;
-    [Tooltip("Si NO usás hard cut, gravedad multiplicada al soltar")]
     public float jumpCutMultiplier = 2.0f;
 
     [Header("Límites")]
-    [Tooltip("Velocidad terminal de caída (en unidades/seg)")]
     public float maxFallSpeed = 25f;
 
-    // Estado
-    bool suppressCutUntilFall = false;   // usado por el doble salto
-    float fallTimer = 0f;                // tiempo acumulado cayendo
-    float prevVy = 0f;                   // para detectar cambio de signo
+    bool suppressCutUntilFall = false;
+    float fallTimer = 0f;
+    float prevVy = 0f;
 
     public void SuppressCutUntilFall() => suppressCutUntilFall = true;
 
     void Awake() {
         rb = GetComponent<Rigidbody2D>();
+        if (airStall == null) airStall = GetComponent<simpleAirStall>();
     }
 
     void FixedUpdate() {
-        Vector2 v = rb.linearVelocity;
+        // Respetar stall vertical
+        if (airStall != null && airStall.IsStalling) {
+            Vector2 v = rb.linearVelocity;
+            if (v.y != 0f) {
+                v.y = 0f;
+                rb.linearVelocity = v;
+            }
+            rb.gravityScale = 0f;
+            prevVy = 0f;
+            return;
+        }
 
-        // Detectar inicio de caída (ápice): de v.y >= 0 a v.y < 0
-        bool startedFallingThisFrame = (prevVy >= 0f && v.y < 0f);
+        Vector2 vel = rb.linearVelocity;
+
+        bool startedFallingThisFrame = (prevVy >= 0f && vel.y < 0f);
         if (startedFallingThisFrame) {
-            fallTimer = 0f;          // reiniciar rampa al empezar a caer
+            fallTimer = 0f;
             suppressCutUntilFall = false;
         }
 
-        if (v.y > 0f) // SUBIENDO
+        if (vel.y > 0f) // SUBIENDO
         {
-            fallTimer = 0f; // mientras sube, no acumulamos rampa
+            fallTimer = 0f;
 
             if (!suppressCutUntilFall && controls != null && !controls.JumpHeld()) {
                 if (hardCutOnRelease) {
-                    if (v.y > cutUpwardSpeed) v.y = cutUpwardSpeed;
-                    if (fallKickSpeed > 0f) v.y = -Mathf.Abs(fallKickSpeed);
-                    rb.linearVelocity = v;
-
-                    // Conviene ya usar la gravedad de caída (arranca firme)
+                    if (vel.y > cutUpwardSpeed) vel.y = cutUpwardSpeed;
+                    if (fallKickSpeed > 0f) vel.y = -Mathf.Abs(fallKickSpeed);
+                    rb.linearVelocity = vel;
                     rb.gravityScale = downGravityScaleStart;
                 }
                 else {
-                    // Corte suave
                     rb.gravityScale = upGravityScale * jumpCutMultiplier;
                 }
             }
             else {
-                // Manteniendo botón o suprimido por doble salto
                 rb.gravityScale = upGravityScale;
             }
         }
-        else if (v.y < 0f) // CAYENDO
+        else if (vel.y < 0f) // CAYENDO
         {
-            // Progresión de gravedad: de Start → Max en fallRampTime
             if (fallRampTime <= 0f) {
                 rb.gravityScale = downGravityScaleMax;
             }
@@ -89,17 +89,15 @@ public class simpleGravity2D : MonoBehaviour {
                 rb.gravityScale = Mathf.Lerp(downGravityScaleStart, downGravityScaleMax, eased);
             }
 
-            // Cap de velocidad de caída
-            if (v.y < -maxFallSpeed) {
-                v.y = -maxFallSpeed;
-                rb.linearVelocity = v;
+            if (vel.y < -maxFallSpeed) {
+                vel.y = -maxFallSpeed;
+                rb.linearVelocity = vel;
             }
         }
-        else // v.y ≈ 0 (ápice)
-        {
+        else { // ÁPICE
             rb.gravityScale = upGravityScale;
         }
 
-        prevVy = v.y;
+        prevVy = vel.y;
     }
 }

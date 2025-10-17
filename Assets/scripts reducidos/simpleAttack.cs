@@ -30,10 +30,20 @@ public class simpleAttack : MonoBehaviour {
     [Tooltip("Color del sprite durante el frame/tick de lectura en HOLD.")]
     public Color holdTickColor = new Color(1f, 0.85f, 0.85f, 1f);
 
+    [Header("Modo alternativo: ‘activo mientras mantengo’")]
+    [Tooltip("Si está activo, el sprite+collider se mantienen encendidos mientras el jugador mantiene la tecla, hasta un máximo = activeTime.")]
+    public bool sustainWhileHeld = false;
+    [Tooltip("Tecla a leer para el modo ‘activo mientras mantengo’. Para S usa KeyCode.S; para D usa KeyCode.D.")]
+    public KeyCode sustainKey = KeyCode.None;
+
     // Estado
     public bool IsActive { get; private set; } = false;     // ventana activa
     public bool InCooldown { get; private set; } = false;   // en cooldown
     public bool InHold { get; private set; } = false;       // modo hold
+
+    // Tiempos expuestos para controladores externos
+    public float ActiveUntil { get; private set; } = -999f;
+    public float CooldownUntil { get; private set; } = -999f;
 
     Coroutine activeRoutine;
     Coroutine holdRoutine;
@@ -65,6 +75,9 @@ public class simpleAttack : MonoBehaviour {
         if (HasSeparateVisualGO && areaSpriteGO != null) {
             areaSpriteGO.SetActive(false);
         }
+
+        ActiveUntil = -999f;
+        CooldownUntil = -999f;
     }
 
     public bool IsActiveOrCooling => IsActive || InCooldown;
@@ -74,9 +87,14 @@ public class simpleAttack : MonoBehaviour {
     // Disparo simple (una vez)
     public bool FireOnce(AttackEffectKind effectKind) {
         if (IsActiveOrCooling || InHold) return false;
-        if (!isActiveAndEnabled) return false; // por seguridad
+        if (!isActiveAndEnabled) return false;
+
         if (activeRoutine != null) StopCoroutine(activeRoutine);
-        activeRoutine = StartCoroutine(Co_ActiveOnce(effectKind));
+        activeRoutine = StartCoroutine(
+            sustainWhileHeld && sustainKey != KeyCode.None
+            ? Co_ActiveSustain(effectKind)
+            : Co_ActiveFixed(effectKind)
+        );
         return true;
     }
 
@@ -119,7 +137,39 @@ public class simpleAttack : MonoBehaviour {
 
     // =============== Coroutines ===============
 
-    IEnumerator Co_ActiveOnce(AttackEffectKind effectKind) {
+    // Ventana fija: como siempre (activo por activeTime exacto)
+    IEnumerator Co_ActiveFixed(AttackEffectKind effectKind) {
+        IsActive = true;
+
+        ShowVisual(true);
+        if (!InHold) SetSpriteColor(Color.white);
+
+        // Esperar al próximo FixedUpdate para coherencia física
+        yield return new WaitForFixedUpdate();
+
+        if (sensor != null) sensor.BeginWindow(effectKind);
+        if (areaCollider != null) areaCollider.enabled = true;
+
+        ActiveUntil = Time.time + activeTime;
+        yield return new WaitForSeconds(activeTime);
+
+        if (areaCollider != null) areaCollider.enabled = false;
+        if (sensor != null) sensor.EndWindow();
+
+        if (!InHold) ShowVisual(false);
+
+        IsActive = false;
+        InCooldown = true;
+
+        CooldownUntil = Time.time + cooldownTime;
+        yield return new WaitForSeconds(cooldownTime);
+
+        InCooldown = false;
+        activeRoutine = null;
+    }
+
+    // Ventana ‘mientras mantengo’: se apaga al soltar o al llegar al tope (=activeTime)
+    IEnumerator Co_ActiveSustain(AttackEffectKind effectKind) {
         IsActive = true;
 
         ShowVisual(true);
@@ -130,8 +180,17 @@ public class simpleAttack : MonoBehaviour {
         if (sensor != null) sensor.BeginWindow(effectKind);
         if (areaCollider != null) areaCollider.enabled = true;
 
-        yield return new WaitForSeconds(activeTime);
+        float start = Time.time;
+        float maxEnd = start + activeTime;
+        ActiveUntil = maxEnd; // tope teórico
 
+        // Mantener encendido hasta soltar o alcanzar el tope
+        while (Time.time < maxEnd && Input.GetKey(sustainKey)) {
+            // mantener activo; el sensor hace lecturas en FixedUpdate
+            yield return null; // frame a frame (puede ser FixedUpdate, pero aquí es suficiente)
+        }
+
+        // Cierre
         if (areaCollider != null) areaCollider.enabled = false;
         if (sensor != null) sensor.EndWindow();
 
@@ -139,7 +198,10 @@ public class simpleAttack : MonoBehaviour {
 
         IsActive = false;
         InCooldown = true;
+
+        CooldownUntil = Time.time + cooldownTime;
         yield return new WaitForSeconds(cooldownTime);
+
         InCooldown = false;
         activeRoutine = null;
     }
@@ -152,10 +214,11 @@ public class simpleAttack : MonoBehaviour {
             SetSpriteColor(holdTickColor);
             yield return waitFixed;
 
-            if (sensor != null) sensor.BeginWindow(AttackEffectKind.None); // S en hold NO lanza
+            if (sensor != null) sensor.BeginWindow(AttackEffectKind.None); // S en hold NO lanza (o ajustá si querés)
             if (areaCollider != null) areaCollider.enabled = true;
             IsActive = true;
 
+            ActiveUntil = Time.time + activeTime;
             yield return new WaitForSeconds(activeTime);
 
             // Tick OFF
