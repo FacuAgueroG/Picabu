@@ -3811,6 +3811,7 @@ MonoBehaviour:
   dash: 304
   attackS: 115
   attackD: 100
+  stallModifier: 306
 --- !u!114 &417257844
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3893,16 +3894,16 @@ MonoBehaviour:
   airStall: {fileID: 417257848}
   comboWindowS: 0.5
   holdTimeS: 0.25
-  tapMaxMs: 80
-  neutralToQuickMs: {x: 80, y: 120}
-  miniHoldMs: {x: 120, y: 220}
-  lateGraceS: 0.1
-  bufferQuick: 0.16
-  bufferSlow: 0.14
-  extraCdQuick: 0.01
-  extraCdSlow: 0.05
-  airStallMs: 110
-  maxAirStallsBeforeHold: 3
+  sBufferMode: 0
+  bufferTailSeconds: 0.08
+  bufferExpireAfterCd: 0.12
+  activeTailBufferSeconds: 0.09
+  stallMs: 110
+  maxAirStallsPerAirSequence: 3
+  bufferDWhileHold: 1
+  dWhileHoldBufferWindow: 0.18
+  bufferDPreHold: 1
+  dPreHoldBufferWindow: 0.35
 --- !u!114 &417257848
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -14856,6 +14857,8 @@ MonoBehaviour:
   holdTickInterval: 0.3
   holdBaseColor: {r: 1, g: 1, b: 1, a: 0.53333336}
   holdTickColor: {r: 1, g: 0, b: 0, a: 0.64705884}
+  sustainWhileHeld: 1
+  sustainKey: 100
 --- !u!1 &1494890519
 GameObject:
   m_ObjectHideFlags: 0
@@ -15091,12 +15094,14 @@ MonoBehaviour:
   areaSpriteGO: {fileID: 1504634602}
   areaSprite: {fileID: 1504634605}
   sensor: {fileID: 1504634607}
-  activeTime: 0.2
-  cooldownTime: 0.2
+  activeTime: 0.12
+  cooldownTime: 0.03
   supportsHold: 1
   holdTickInterval: 0.3
   holdBaseColor: {r: 1, g: 1, b: 1, a: 0.50980395}
   holdTickColor: {r: 0.9622642, g: 0.45843717, b: 0.45843717, a: 0.6039216}
+  sustainWhileHeld: 1
+  sustainKey: 115
 --- !u!114 &1504634607
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -17344,6 +17349,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1812282109}
   - component: {fileID: 1812282108}
+  - component: {fileID: 1812282110}
   m_Layer: 6
   m_Name: Ground1
   m_TagString: OneWay
@@ -17382,7 +17388,7 @@ BoxCollider2D:
     serializedVersion: 2
     m_Bits: 4294967295
   m_IsTrigger: 0
-  m_UsedByEffector: 0
+  m_UsedByEffector: 1
   m_CompositeOperation: 0
   m_CompositeOrder: 0
   m_Offset: {x: 27.479473, y: -2.1191301}
@@ -17430,6 +17436,25 @@ Transform:
   - {fileID: 31975825}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!251 &1812282110
+PlatformEffector2D:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1812282107}
+  m_Enabled: 1
+  m_UseColliderMask: 1
+  m_ColliderMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_RotationalOffset: 0
+  m_UseOneWay: 1
+  m_UseOneWayGrouping: 0
+  m_SurfaceArc: 180
+  m_UseSideFriction: 0
+  m_UseSideBounce: 0
+  m_SideArc: 1
 --- !u!1 &1827615063
 GameObject:
   m_ObjectHideFlags: 0
