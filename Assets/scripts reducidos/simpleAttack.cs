@@ -1,5 +1,5 @@
-﻿using UnityEngine;
-using System.Collections;
+﻿using System.Collections;
+using UnityEngine;
 
 public enum AttackEffectKind { None, Launch }
 
@@ -20,6 +20,10 @@ public class simpleAttack : MonoBehaviour {
     [Header("Tiempos base")]
     [Min(0.01f)] public float activeTime = 0.20f;
     [Min(0f)] public float cooldownTime = 0.20f;
+
+    [Header("Cooldowns (específicos)")]
+    [Tooltip("Solo para S al mantener Ctrl: intervalo mínimo entre dos golpes Ctrl+S efectivos (seg). No afecta al CD normal.")]
+    [Min(0f)] public float ctrlSBetweenHitsCooldown = 0.12f;
 
     [Header("Modo HOLD (solo si esta área lo soporta)")]
     public bool supportsHold = false;
@@ -57,8 +61,6 @@ public class simpleAttack : MonoBehaviour {
         if (sensor == null) sensor = GetComponent<simpleAttackSensor>();
         if (areaSprite == null) areaSprite = GetComponentInChildren<SpriteRenderer>(true);
 
-        // Si no nos dieron un GO de sprite explícito, pero hay sprite renderer,
-        // usamos el GameObject del renderer para el control visual.
         if (areaSpriteGO == null && areaSprite != null) {
             areaSpriteGO = areaSprite.gameObject;
         }
@@ -69,8 +71,7 @@ public class simpleAttack : MonoBehaviour {
     void Awake() {
         if (areaCollider != null) areaCollider.enabled = false;
 
-        // ⚠️ Nunca apagues ESTE GameObject. Si el visual está en este mismo GO,
-        // controla el renderer; si es un hijo independiente, sí podés SetActive(false).
+        // ⚠️ Nunca apagues ESTE GameObject.
         if (areaSprite != null) areaSprite.enabled = false; // renderer apagado por defecto
         if (HasSeparateVisualGO && areaSpriteGO != null) {
             areaSpriteGO.SetActive(false);
@@ -186,8 +187,7 @@ public class simpleAttack : MonoBehaviour {
 
         // Mantener encendido hasta soltar o alcanzar el tope
         while (Time.time < maxEnd && Input.GetKey(sustainKey)) {
-            // mantener activo; el sensor hace lecturas en FixedUpdate
-            yield return null; // frame a frame (puede ser FixedUpdate, pero aquí es suficiente)
+            yield return null;
         }
 
         // Cierre
@@ -238,11 +238,9 @@ public class simpleAttack : MonoBehaviour {
     // =============== Visual helpers ===============
 
     void ShowVisual(bool on) {
-        // Si el visual es un hijo independiente, podemos setActive al hijo.
         if (HasSeparateVisualGO && areaSpriteGO != null) {
             areaSpriteGO.SetActive(on);
         }
-        // Siempre controlamos el renderer (si existe) para soportar el caso “mismo GO”.
         if (areaSprite != null) areaSprite.enabled = on;
     }
 

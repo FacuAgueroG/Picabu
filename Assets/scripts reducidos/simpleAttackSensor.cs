@@ -3,12 +3,30 @@ using System.Collections.Generic;
 
 public class simpleAttackSensor : MonoBehaviour {
     [Header("Collider objetivo (externo)")]
-    [Tooltip("El collider del hitbox que se enciende/apaga (Circle/Box).")]
     public Collider2D targetCollider;
 
     [Header("Filtro de enemigos")]
     public LayerMask enemyLayers;
     public string enemyTag = "Enemy";
+
+    // ===== Metadatos de la ventana actual (los setea el controller del atacante) =====
+    //[Header("Hit Metadata (asignado por el atacante)")]
+    //[Tooltip("Quién originó este golpe (player).")]
+    [HideInInspector]
+    public Transform metaAttacker;
+
+    //[Tooltip("True si el atacante estaba manteniendo Ctrl al disparar esta ventana de S.")]
+    [HideInInspector]
+    public bool metaIsCtrlS;
+
+    //[Tooltip("Id de 'air sequence' del atacante (aumenta cuando el atacante aterriza).")]
+    [HideInInspector]
+    public int metaAttackerAirSeqId;
+
+    // Copias activas (congeladas) para la ventana abierta
+    Transform _activeAttacker;
+    bool _activeIsCtrlS;
+    int _activeAttackerAirSeqId;
 
     // Estado ventana
     bool windowOpen = false;
@@ -26,6 +44,12 @@ public class simpleAttackSensor : MonoBehaviour {
         currentEffect = effectKind;
         hitThisWindow.Clear();
         windowOpen = true;
+
+        // Congelar metadatos para esta ventana
+        _activeAttacker = metaAttacker;
+        _activeIsCtrlS = metaIsCtrlS;
+        _activeAttackerAirSeqId = metaAttackerAirSeqId;
+
         ScanOnce();
     }
 
@@ -33,6 +57,11 @@ public class simpleAttackSensor : MonoBehaviour {
         windowOpen = false;
         hitThisWindow.Clear();
         currentEffect = AttackEffectKind.None;
+
+        // Limpiar activos
+        _activeAttacker = null;
+        _activeIsCtrlS = false;
+        _activeAttackerAirSeqId = 0;
     }
 
     void FixedUpdate() {
@@ -43,7 +72,6 @@ public class simpleAttackSensor : MonoBehaviour {
     void ScanOnce() {
         if (targetCollider == null || !targetCollider.enabled) return;
 
-        // Filtro robusto
         ContactFilter2D filter = new ContactFilter2D();
         filter.useTriggers = true;
 
@@ -76,10 +104,16 @@ public class simpleAttackSensor : MonoBehaviour {
         if (hitThisWindow.Contains(key)) return;
         hitThisWindow.Add(key);
 
+        // 1) Efectos de ataque del área
         if (currentEffect == AttackEffectKind.Launch) {
             var receiver = other.GetComponentInParent<simpleLaunch>();
             if (receiver != null) receiver.ReceiveLaunch();
         }
-        // Aquí podrías añadir daño/poise para currentEffect == None si quieres.
+
+        // 2) Notificar al ENEMIGO (él decide si se stallea o no)
+        var enemyStall = other.GetComponentInParent<simpleEnemyAirStall>();
+        if (enemyStall != null) {
+            enemyStall.ApplyStallFromHit(_activeAttacker, _activeAttackerAirSeqId, _activeIsCtrlS, -1f);
+        }
     }
 }

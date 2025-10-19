@@ -9,46 +9,35 @@ public class simpleCombatController : MonoBehaviour {
     public simpleAirStall airStall;
 
     [Header("Combo S (base)")]
-    [Tooltip("Tiempo máx entre S válidas para no resetear el combo.")]
     public float comboWindowS = 0.50f;
-    [Tooltip("Tiempo que debes mantener S para entrar a HOLD (solo S3+).")]
     public float holdTimeS = 0.25f;
 
     // ================= Buffer S (configurable) =================
     public enum SBufferMode { FullCooldown, TailOnly }
 
     [Header("Buffer S (en cooldown)")]
-    [Tooltip("Modo de apertura del buffer mientras S está en cooldown.")]
     public SBufferMode sBufferMode = SBufferMode.FullCooldown;
-
-    [Tooltip("Si el modo es TailOnly, el buffer se abre solo en los últimos Xs del CD.")]
-    public float bufferTailSeconds = 0.12f;      // 120 ms
-
-    [Tooltip("Validez del buffer una vez termina el CD.")]
-    public float bufferExpireAfterCd = 0.12f;    // 120 ms
+    public float bufferTailSeconds = 0.12f;
+    public float bufferExpireAfterCd = 0.12f;
 
     [Header("Buffer S (cola de animación)")]
-    [Tooltip("Durante IsActive, si faltan <= Xs para terminar, se permite buffer al CD siguiente.")]
-    public float activeTailBufferSeconds = 0.09f; // 90 ms (punto de partida)
+    public float activeTailBufferSeconds = 0.09f;
 
-    // ================= Air-stall con modificador =================
-    [Header("Air-stall (con Left Ctrl)")]
-    [Tooltip("Duración del stall vertical en ms (cuando se sostiene Left Ctrl en el aire).")]
-    public float stallMs = 110f;
-    [Tooltip("Máximo de stalls durante una misma secuencia aérea (entre tocar suelos).")]
+    // ================= Air-stall (player) =================
+    [Header("Air-stall (player)")]
+    [Tooltip("Máximo de stalls del PLAYER durante una misma secuencia aérea (entre tocar suelos).")]
     public int maxAirStallsPerAirSequence = 3;
+    // Duración viene de simpleAirStall.defaultStallMs
 
-    // ================= D durante/antes de HOLD (robustez) =================
+    // ===== Cooldown separado entre hits para Ctrl+S (vive en simpleAttack del S) =====
+    float lastCtrlSHitTime = -999f;
+
+    // ================= D durante/antes de HOLD =================
     [Header("D + HOLD")]
-    [Tooltip("Si D se pulsa en HOLD y D no está libre, se bufferiza sin cortar el HOLD.")]
     public bool bufferDWhileHold = true;
-    [Tooltip("Ventana de espera para disparar D cuando quede libre (si se pulsó en HOLD).")]
-    public float dWhileHoldBufferWindow = 0.18f; // 180 ms
-
-    [Tooltip("Si D se pulsa MIENTRAS se está 'preparando' el HOLD (tryingToHold), se bufferiza y se consume al entrar en HOLD.")]
+    public float dWhileHoldBufferWindow = 0.18f;
     public bool bufferDPreHold = true;
-    [Tooltip("Ventana máx para que ese D buffered se consuma al entrar en HOLD.")]
-    public float dPreHoldBufferWindow = 0.35f; // >= holdTimeS + margen
+    public float dPreHoldBufferWindow = 0.35f;
 
     // ----- Estado S / combo -----
     int sCount = 0;
@@ -60,18 +49,19 @@ public class simpleCombatController : MonoBehaviour {
 
     // Buffer S
     bool hasBufferedS = false;
-    float bufferedConsumeNotBefore = -999f; // no antes del fin de CD
+    float bufferedConsumeNotBefore = -999f;
     float bufferedExpireAt = -999f;
 
-    // Secuencia aérea (para limitar stalls)
+    // Secuencia aérea del PLAYER (para metadatos hacia el enemigo)
     int stallsThisAirSeq = 0;
     bool wasGroundedLastFrame = true;
+    int myAirSeqId = 0; // aumenta cada vez que aterrizamos → próxima secuencia aérea
 
-    // Buffer D mientras estamos en HOLD
+    // Buffer D en HOLD
     bool hasBufferedDWhileHold = false;
     float bufferedDWhileHoldExpireAt = -999f;
 
-    // Buffer D cuando todavía NO estamos en HOLD pero lo estamos preparando (tryingToHold)
+    // Buffer D pre-HOLD
     bool hasBufferedDPreHold = false;
     float bufferedDPreHoldExpireAt = -999f;
 
@@ -87,17 +77,18 @@ public class simpleCombatController : MonoBehaviour {
     void Update() {
         if (controls == null || attackSArea == null || attackDArea == null) return;
 
-        // Track de aire/suelo para resetear contador de stalls
         bool grounded = (ground != null) && ground.IsGrounded();
         if (grounded && !wasGroundedLastFrame) {
+            // ATERRIZÓ: reset player counters y avanza id de secuencia para próximos golpes aéreos
             stallsThisAirSeq = 0;
+            myAirSeqId++;
+            // No hay “stall enemigo armado” que limpiar, ya no lo manejamos acá
         }
         wasGroundedLastFrame = grounded;
 
         HandleSInput(grounded);
         HandleDInput(grounded);
 
-        // Ventana de combo: NO resetees si estamos intentando holdear (S3+ sosteniendo)
         if (sCount > 0 && !attackSArea.InHold) {
             float dt = Time.time - lastSValidTime;
             bool guardingForHold = tryingToHold && controls.AttackSHeld();
@@ -110,7 +101,6 @@ public class simpleCombatController : MonoBehaviour {
         TryConsumeDPreHoldBufferIfReady();
         TryConsumeDWhileHoldBufferIfReady();
 
-        // HOLD robusto: cancelar si deja de sostener
         if (attackSArea.InHold && !controls.AttackSHeld()) {
             attackSArea.StopHold();
         }
@@ -118,33 +108,49 @@ public class simpleCombatController : MonoBehaviour {
 
     // ===================== S =====================
 
+    bool CtrlSCooldownAllowsNow() {
+        if (attackSArea == null) return true;
+        if (!controls.StallHeld()) return true; // solo aplica con Ctrl activo
+        float cd = Mathf.Max(0f, attackSArea.ctrlSBetweenHitsCooldown);
+        if (cd <= 0f) return true;
+        return (Time.time - lastCtrlSHitTime) >= cd;
+    }
+
+    void MarkCtrlSHitIfApplicable() {
+        if (controls.StallHeld()) lastCtrlSHitTime = Time.time;
+    }
+
+    void AttachHitMetadataToSensor() {
+        if (attackSArea.sensor == null) return;
+        attackSArea.sensor.metaAttacker = this.transform;
+        attackSArea.sensor.metaIsCtrlS = controls.StallHeld();
+        attackSArea.sensor.metaAttackerAirSeqId = myAirSeqId;
+    }
+
     void HandleSInput(bool groundedNow) {
         bool airborne = !groundedNow;
 
-        // --- Down ---
         if (controls.AttackSDown()) {
-            // AIR STALL con modificador (independiente de quick/slow/HOLD)
+            // Player air-stall opcional con Ctrl (limitado por maxAirStallsPerAirSequence)
             if (airborne && controls.StallHeld() && stallsThisAirSeq < maxAirStallsPerAirSequence) {
                 if (airStall != null) {
-                    airStall.ApplyStall(stallMs);
+                    airStall.ApplyStall(); // usa default del componente
                     stallsThisAirSeq++;
                 }
             }
 
-            // (A) Durante IsActive: permitir buffer SOLO en la cola de la animación
+            // (A) En IsActive: buffer cola
             if (attackSArea.IsActive) {
                 float timeToActiveEnd = Mathf.Max(0f, attackSArea.ActiveUntil - Time.time);
                 if (timeToActiveEnd <= activeTailBufferSeconds) {
-                    // Buffer al fin de CD (igual que si lo hubieras apretado en CD)
                     hasBufferedS = true;
-                    bufferedConsumeNotBefore = attackSArea.CooldownUntil; // no antes del fin de CD
+                    bufferedConsumeNotBefore = attackSArea.CooldownUntil;
                     bufferedExpireAt = attackSArea.CooldownUntil + bufferExpireAfterCd;
                 }
-                // Si no estás en la cola, se ignora (no hay buffer en plena animación)
                 return;
             }
 
-            // (B) Si está en cooldown: buffer según modo
+            // (B) En cooldown: buffer según modo
             if (attackSArea.InCooldown) {
                 float timeToCdEnd = Mathf.Max(0f, attackSArea.CooldownUntil - Time.time);
                 bool canOpen =
@@ -153,18 +159,25 @@ public class simpleCombatController : MonoBehaviour {
 
                 if (canOpen) {
                     hasBufferedS = true;
-                    bufferedConsumeNotBefore = attackSArea.CooldownUntil; // no antes del fin de CD
+                    bufferedConsumeNotBefore = attackSArea.CooldownUntil;
                     bufferedExpireAt = attackSArea.CooldownUntil + bufferExpireAfterCd;
                 }
                 return;
             }
 
-            // (C) Libre: dispara ya
+            // (C) Libre: gate de Ctrl+S
+            if (!CtrlSCooldownAllowsNow()) return;
+
+            // ANTES de disparar la ventana, adjuntamos metadatos
+            AttachHitMetadataToSensor();
+
+            // Disparo real
             if (attackSArea.FireOnce(AttackEffectKind.None)) {
+                MarkCtrlSHitIfApplicable();
                 lastSValidTime = Time.time;
                 sCount = Mathf.Max(1, sCount + 1);
 
-                // Intento HOLD desde S3+
+                // HOLD desde S3+
                 if (sCount >= 3 && controls.AttackSHeld()) {
                     tryingToHold = true;
                     holdPressStartTime = Time.time;
@@ -176,18 +189,18 @@ public class simpleCombatController : MonoBehaviour {
             }
         }
 
-        // --- Held: HOLD desde S3+ (si sostiene lo suficiente) ---
+        // HOLD si sostuvo suficiente
         if (tryingToHold && controls.AttackSHeld() &&
             (Time.time - holdPressStartTime) >= holdTimeS) {
             if (!attackSArea.IsActiveOrCooling && !attackSArea.InHold) {
+                AttachHitMetadataToSensor(); // metadatos también para ticks HOLD si querés usar
                 if (attackSArea.StartHold()) {
-                    // Si había D buffered "pre-hold", se consumirá al entrar al HOLD
+                    // no-op
                 }
             }
-            tryingToHold = false; // consumimos el intento
+            tryingToHold = false;
         }
 
-        // Abortamos intento de HOLD si soltó antes del tiempo
         if (!controls.AttackSHeld() && tryingToHold) {
             tryingToHold = false;
             holdPressStartTime = -1f;
@@ -197,18 +210,24 @@ public class simpleCombatController : MonoBehaviour {
     void TryConsumeSBufferIfReady() {
         if (!hasBufferedS) return;
 
-        // Requisitos: fin de CD alcanzado, dentro de validez, y S libre
         if (Time.time >= bufferedConsumeNotBefore &&
             Time.time <= bufferedExpireAt &&
             !attackSArea.IsActiveOrCooling &&
             !attackSArea.InHold &&
             !attackDArea.IsActive) {
+
+            // Gate Ctrl+S antes de consumir buffer
+            if (!CtrlSCooldownAllowsNow()) { hasBufferedS = false; return; }
+
             hasBufferedS = false;
+
+            AttachHitMetadataToSensor();
+
             if (attackSArea.FireOnce(AttackEffectKind.None)) {
+                MarkCtrlSHitIfApplicable();
                 lastSValidTime = Time.time;
                 sCount = Mathf.Max(1, sCount + 1);
 
-                // Si el jugador está sosteniendo S y ya vamos por S3+, permitir HOLD
                 if (sCount >= 3 && controls.AttackSHeld()) {
                     tryingToHold = true;
                     holdPressStartTime = Time.time;
@@ -216,10 +235,7 @@ public class simpleCombatController : MonoBehaviour {
             }
         }
 
-        // Expiración del buffer
-        if (Time.time > bufferedExpireAt) {
-            hasBufferedS = false;
-        }
+        if (Time.time > bufferedExpireAt) hasBufferedS = false;
     }
 
     void ResetSCombo() {
@@ -241,16 +257,15 @@ public class simpleCombatController : MonoBehaviour {
         if (attackSArea.InHold) attackSArea.StopHold();
     }
 
-    // ===================== D (con buffer en HOLD y pre-HOLD) =====================
+    // ===================== D =====================
 
     void HandleDInput(bool groundedNow) {
         bool airborne = !groundedNow;
 
         if (controls.AttackDDown()) {
-            // AIR STALL por modificador (si querés que D también pueda stallar)
             if (airborne && controls.StallHeld() && stallsThisAirSeq < maxAirStallsPerAirSequence) {
                 if (airStall != null) {
-                    airStall.ApplyStall(stallMs);
+                    airStall.ApplyStall();
                     stallsThisAirSeq++;
                 }
             }
@@ -283,10 +298,7 @@ public class simpleCombatController : MonoBehaviour {
     void TryConsumeDPreHoldBufferIfReady() {
         if (!hasBufferedDPreHold) return;
 
-        if (Time.time > bufferedDPreHoldExpireAt) {
-            hasBufferedDPreHold = false;
-            return;
-        }
+        if (Time.time > bufferedDPreHoldExpireAt) { hasBufferedDPreHold = false; return; }
 
         if (attackSArea.InHold) {
             hasBufferedDPreHold = false;
@@ -299,10 +311,7 @@ public class simpleCombatController : MonoBehaviour {
     void TryConsumeDWhileHoldBufferIfReady() {
         if (!hasBufferedDWhileHold) return;
 
-        if (!attackSArea.InHold || Time.time > bufferedDWhileHoldExpireAt) {
-            hasBufferedDWhileHold = false;
-            return;
-        }
+        if (!attackSArea.InHold || Time.time > bufferedDWhileHoldExpireAt) { hasBufferedDWhileHold = false; return; }
 
         if (!attackDArea.IsActiveOrCooling && attackDArea.isActiveAndEnabled) {
             hasBufferedDWhileHold = false;
