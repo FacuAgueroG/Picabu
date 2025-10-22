@@ -52,9 +52,7 @@ public class simpleLaunch : MonoBehaviour {
             }
 
             // 2) Velocidad inicial exacta para alcanzar H en T (bajo gUp)
-            float v0 = (gravityHelper != null)
-                ? simpleEnemyGravity2D.ComputeInitialSpeed(apexHeight, timeToApex)
-                : simpleEnemyGravity2D.ComputeInitialSpeed(apexHeight, timeToApex); // mismo cálculo aunque no haya helper
+            float v0 = simpleEnemyGravity2D.ComputeInitialSpeed(apexHeight, timeToApex);
 
             // 3) Aplicar lanzamiento: anulamos vy y seteamos v0
             Vector2 v = rb.linearVelocity;
@@ -67,6 +65,14 @@ public class simpleLaunch : MonoBehaviour {
             rb.AddForce(Vector2.up * launchForce, ForceMode2D.Impulse);
         }
 
+        // Notificar estado base
         if (state != null) state.NotifyLaunched();
+
+        // === NUEVO ===
+        // Armar el ciclo de stun solo en enemigos de suelo (no voladores)
+        var groundEnemy = GetComponent<simpleGroundEnemy>();
+        if (groundEnemy != null) {
+            groundEnemy.ArmStunOnNextAirborneFromLaunch();
+        }
     }
 }

@@ -1,38 +1,34 @@
 using UnityEngine;
 using System.Collections.Generic;
 
+public enum AttackAreaKind { S, D }   // distinguir área del golpe
+
 public class simpleAttackSensor : MonoBehaviour {
-    [Header("Collider objetivo (externo)")]
+    [Header("Collider del hitbox (isTrigger = true)")]
     public Collider2D targetCollider;
 
     [Header("Filtro de enemigos")]
     public LayerMask enemyLayers;
-    public string enemyTag = "Enemy";
+    public string enemyTag = "enemy";
 
-    // ===== Metadatos de la ventana actual (los setea el controller del atacante) =====
-    //[Header("Hit Metadata (asignado por el atacante)")]
-    //[Tooltip("Quién originó este golpe (player).")]
-    [HideInInspector]
-    public Transform metaAttacker;
+    [Header("Área (S o D)")]
+    public AttackAreaKind areaKind = AttackAreaKind.S;
 
-    //[Tooltip("True si el atacante estaba manteniendo Ctrl al disparar esta ventana de S.")]
-    [HideInInspector]
-    public bool metaIsCtrlS;
-
-    //[Tooltip("Id de 'air sequence' del atacante (aumenta cuando el atacante aterriza).")]
-    [HideInInspector]
-    public int metaAttackerAirSeqId;
-
-    // Copias activas (congeladas) para la ventana abierta
-    Transform _activeAttacker;
-    bool _activeIsCtrlS;
-    int _activeAttackerAirSeqId;
+    [Header("Metadatos (seteados por el atacante antes de BeginWindow)")]
+    [HideInInspector] public Transform metaAttacker;
+    [HideInInspector] public bool metaIsCtrl = false;      // Ctrl+S / Ctrl+D
+    [HideInInspector] public int metaAttackerAirSeqId = 0; // id de secuencia aérea del atacante
+    [HideInInspector] public bool metaIsHoldTick = false;  // true solo durante ticks de HOLD
 
     // Estado ventana
     bool windowOpen = false;
-    AttackEffectKind currentEffect = AttackEffectKind.None;
+    AttackEffectKind currentEffect = AttackEffectKind.None;   // definido en simpleAttack.cs
     readonly HashSet<Transform> hitThisWindow = new HashSet<Transform>();
     static readonly Collider2D[] _overlapBuffer = new Collider2D[32];
+
+    // ===== Fallback de secuencia aérea =====
+    static readonly Dictionary<Transform, int> s_lastSeqId = new Dictionary<Transform, int>();
+    static readonly Dictionary<Transform, bool> s_prevGrounded = new Dictionary<Transform, bool>();
 
     void Awake() {
         if (targetCollider == null)
@@ -44,12 +40,6 @@ public class simpleAttackSensor : MonoBehaviour {
         currentEffect = effectKind;
         hitThisWindow.Clear();
         windowOpen = true;
-
-        // Congelar metadatos para esta ventana
-        _activeAttacker = metaAttacker;
-        _activeIsCtrlS = metaIsCtrlS;
-        _activeAttackerAirSeqId = metaAttackerAirSeqId;
-
         ScanOnce();
     }
 
@@ -57,11 +47,6 @@ public class simpleAttackSensor : MonoBehaviour {
         windowOpen = false;
         hitThisWindow.Clear();
         currentEffect = AttackEffectKind.None;
-
-        // Limpiar activos
-        _activeAttacker = null;
-        _activeIsCtrlS = false;
-        _activeAttackerAirSeqId = 0;
     }
 
     void FixedUpdate() {
@@ -74,14 +59,8 @@ public class simpleAttackSensor : MonoBehaviour {
 
         ContactFilter2D filter = new ContactFilter2D();
         filter.useTriggers = true;
-
-        if (enemyLayers.value != 0) {
-            filter.SetLayerMask(enemyLayers);
-            filter.useLayerMask = true;
-        }
-        else {
-            filter.useLayerMask = false;
-        }
+        if (enemyLayers.value != 0) { filter.SetLayerMask(enemyLayers); filter.useLayerMask = true; }
+        else { filter.useLayerMask = false; }
 
         int count = targetCollider.Overlap(filter, _overlapBuffer);
         for (int i = 0; i < count && i < _overlapBuffer.Length; i++) {
@@ -97,23 +76,91 @@ public class simpleAttackSensor : MonoBehaviour {
         return byLayer || byTag;
     }
 
+    // ===== Helpers de fallback =====
+    int GetOrComputeAirSeqId(Transform attacker) {
+        if (attacker == null) return 0;
+
+        if (metaAttackerAirSeqId > 0) return metaAttackerAirSeqId;
+
+        var ground = attacker.GetComponent<simpleGround2D>();
+        bool groundedNow = (ground != null) && ground.IsGrounded();
+
+        bool prevG;
+        if (!s_prevGrounded.TryGetValue(attacker, out prevG)) {
+            s_prevGrounded[attacker] = groundedNow;
+            if (!groundedNow) {
+                s_lastSeqId[attacker] = (s_lastSeqId.TryGetValue(attacker, out var cur) ? cur : 0) + 1;
+            }
+        }
+        else {
+            if (prevG && !groundedNow) {
+                s_lastSeqId[attacker] = (s_lastSeqId.TryGetValue(attacker, out var cur) ? cur : 0) + 1;
+            }
+            s_prevGrounded[attacker] = groundedNow;
+        }
+
+        return s_lastSeqId.TryGetValue(attacker, out var id) ? id : 0;
+    }
+
+    bool GetCtrlNow() {
+        if (metaIsCtrl) return true;
+        if (metaAttacker == null) return false;
+        var attCtrls = metaAttacker.GetComponent<simpleControls>();
+        return attCtrls != null && attCtrls.StallHeld();
+    }
+
     void TryHit(Collider2D other) {
         if (other == null || !IsEnemy(other.gameObject)) return;
 
-        var key = other.transform;
-        if (hitThisWindow.Contains(key)) return;
-        hitThisWindow.Add(key);
+        var root = other.attachedRigidbody ? other.attachedRigidbody.transform : other.transform;
+        if (root == null) root = other.transform;
 
-        // 1) Efectos de ataque del área
+        if (hitThisWindow.Contains(root)) return; // evitar hits duplicados por ventana
+        hitThisWindow.Add(root);
+
+        bool isCtrlNow = GetCtrlNow();
+        int seqId = GetOrComputeAirSeqId(metaAttacker);
+
+        // 1) Efectos especiales
         if (currentEffect == AttackEffectKind.Launch) {
-            var receiver = other.GetComponentInParent<simpleLaunch>();
-            if (receiver != null) receiver.ReceiveLaunch();
+            var launch = root.GetComponent<simpleLaunch>();
+            if (launch != null) launch.ReceiveLaunch();
+            return;
+        }
+        else if (currentEffect == AttackEffectKind.DragToGround) {
+            // Volador
+            var flyEff = root.GetComponent<simpleFlyingEnemy>();
+            if (flyEff != null) {
+                flyEff.ReceiveSpecialEffect(areaKind, AttackEffectKind.DragToGround, metaAttacker, seqId);
+                return;
+            }
+            // NUEVO: Enemigo de suelo (solo si está en aire tras launch)
+            var groundEff = root.GetComponent<simpleGroundEnemy>();
+            if (groundEff != null) {
+                groundEff.ReceiveSpecialEffect(areaKind, AttackEffectKind.DragToGround, metaAttacker, seqId);
+                return;
+            }
+            return;
         }
 
-        // 2) Notificar al ENEMIGO (él decide si se stallea o no)
-        var enemyStall = other.GetComponentInParent<simpleEnemyAirStall>();
-        if (enemyStall != null) {
-            enemyStall.ApplyStallFromHit(_activeAttacker, _activeAttackerAirSeqId, _activeIsCtrlS, -1f);
+        // 2) Golpe simple (sin efecto especial)
+        // Reglas actuales:
+        // - Volador: no empujar en HOLD, ni si está en Stun.
+        var fly = root.GetComponent<simpleFlyingEnemy>();
+        if (fly != null) {
+            if (!metaIsHoldTick &&
+                fly.state != simpleFlyingEnemy.FlyState.StunnedAir &&
+                fly.state != simpleFlyingEnemy.FlyState.StunnedGround) {
+                fly.NotifySimpleHit(areaKind, isCtrlNow);
+            }
+        }
+
+        // (Para enemigos de suelo no tocamos el empuje simple aquí; su lógica de empuje, si existiera, sería propia)
+
+        // 3) Air-stall de enemigo (Ctrl+S / Ctrl+D) – permitido incluso en StunnedAir
+        if (isCtrlNow) {
+            var stall = root.GetComponent<simpleEnemyAirStall>();
+            if (stall != null) stall.TryApplyStall(metaAttacker, seqId);
         }
     }
 }

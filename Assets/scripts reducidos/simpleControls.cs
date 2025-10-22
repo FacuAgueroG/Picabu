@@ -41,6 +41,7 @@ public class simpleControls : MonoBehaviour {
     public bool AttackSUp() => !blockInput && Input.GetKeyUp(attackS);
 
     public bool AttackDDown() => !blockInput && Input.GetKeyDown(attackD);
+    public bool AttackDHeld() => !blockInput && Input.GetKey(attackD);
 
     // Modificador de air-stall
     public bool StallHeld() => !blockInput && Input.GetKey(stallModifier);

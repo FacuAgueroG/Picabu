@@ -1,95 +1,85 @@
-﻿using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
+﻿using UnityEngine;
+using System.Collections;
 
 /// <summary>
-/// Controla el air-stall DEL ENEMIGO y decide si aplicarlo cuando recibe un hit.
-/// - Aplica vy=0 y gravityScale=0 durante ms.
-/// - Lleva el conteo de "solo en los N primeros Ctrl+S" POR atacante y POR secuencia aérea del atacante.
-/// - Si se aplica al menos un stall por Ctrl+S, le indica a la gravedad que fuerce caída a Max hasta tocar suelo.
+/// Air-stall para enemigos cuando reciben golpes con Ctrl (Ctrl+S / Ctrl+D).
+/// Limita a N stalls por "air sequence" del ATACANTE.
+/// Pensado para Rigidbody2D Dynamic (enemigo en aire).
 /// </summary>
-[RequireComponent(typeof(Rigidbody2D))]
+[DisallowMultipleComponent]
 public class simpleEnemyAirStall : MonoBehaviour {
-    [Header("Duración por defecto")]
-    [Min(0f)] public float defaultStallMs = 90f;
+    [Header("Stall (ms)")]
+    [Tooltip("Tiempo de stall por hit con Ctrl (en milisegundos).")]
+    public float stallMs = 90f;
 
-    [Header("Límite por atacante/secuencia")]
-    [Tooltip("Máximo de stalls que este enemigo acepta por cada atacante en una misma 'air sequence' del atacante (Ctrl+S).")]
-    public int maxStallsPerAttackerAirSeq = 3;
+    [Header("Límite por secuencia del atacante")]
+    [Tooltip("Máximo de stalls aceptados por 'air sequence' del atacante (primeros 3 golpes).")]
+    [Range(1, 5)] public int maxStallsPerAttackerSeq = 3;
+
+    [Header("Depuración")]
+    public bool enableDebug = false;
 
     Rigidbody2D rb;
     Coroutine stallRoutine;
-    public bool IsStalling { get; private set; }
 
-    // Ref a la gravedad para forzar modo "Max hasta suelo" tras un stall aceptado
-    simpleEnemyGravity2D gravityHelper;
+    // Tracking por secuencia del ATACANTE
+    int lastAttackerSeqId = -1;
+    int usedThisSeq = 0;
 
-    class PerAttackerTrack {
-        public int lastAirSeqId = -1;
-        public int countInSeq = 0;
-    }
-    readonly Dictionary<Transform, PerAttackerTrack> perAttacker = new Dictionary<Transform, PerAttackerTrack>();
+    /// <summary>
+    /// Expone si el enemigo está actualmente en stall (para helpers de gravedad).
+    /// </summary>
+    public bool IsStalling { get; private set; } = false;
 
     void Awake() {
         rb = GetComponent<Rigidbody2D>();
-        gravityHelper = GetComponent<simpleEnemyGravity2D>();
     }
 
     /// <summary>
-    /// Decide si este enemigo debe stallearse ante un hit.
-    /// - Aplica stall SOLO si isCtrlS == true.
-    /// - Respeta maxStallsPerAttackerAirSeq por atacante y por airSeqId del atacante.
-    /// - Si se aplica, fuerza en la gravedad el modo "downGravityScaleMax hasta tocar suelo".
+    /// Intenta aplicar stall. Cuenta por secuencia aérea del ATACANTE (seqId).
     /// </summary>
-    public void ApplyStallFromHit(Transform attacker, int attackerAirSeqId, bool isCtrlS, float msSuggested = -1f) {
-        if (!isCtrlS) return; // solo responde a Ctrl+S
-        int seqId = Mathf.Max(0, attackerAirSeqId);
-
-        if (attacker == null) {
-            // Aceptamos (sin tracking) y forzamos modo Max-fall
-            ApplyStall(msSuggested);
-            if (gravityHelper != null) gravityHelper.ForceMaxFallUntilGround();
-            return;
+    public bool TryApplyStall(Transform attacker, int attackerAirSeqId) {
+        // Si cambia el id de secuencia del atacante, reseteamos contador.
+        if (attackerAirSeqId != lastAttackerSeqId) {
+            lastAttackerSeqId = attackerAirSeqId;
+            usedThisSeq = 0;
         }
 
-        if (!perAttacker.TryGetValue(attacker, out var trk)) {
-            trk = new PerAttackerTrack { lastAirSeqId = seqId, countInSeq = 0 };
-            perAttacker[attacker] = trk;
+        if (usedThisSeq >= maxStallsPerAttackerSeq) {
+            if (enableDebug) Debug.Log($"{name}: EnemyAirStall rechazado (límite por secuencia alcanzado).");
+            return false;
         }
 
-        if (trk.lastAirSeqId != seqId) {
-            trk.lastAirSeqId = seqId;
-            trk.countInSeq = 0;
+        // Requiere cuerpo dinámico para que tenga sentido (enemigo en aire).
+        if (rb == null || !rb.simulated || rb.bodyType != RigidbodyType2D.Dynamic) {
+            if (enableDebug) Debug.Log($"{name}: EnemyAirStall ignorado (Rigidbody no-dynamic).");
+            return false;
         }
 
-        if (trk.countInSeq >= Mathf.Max(0, maxStallsPerAttackerAirSeq)) return;
-
-        // Aceptamos este stall
-        trk.countInSeq++;
-        ApplyStall(msSuggested);
-
-        // 🚩 Indicar a la gravedad que, al salir del stall, use Max hasta suelo
-        if (gravityHelper != null) gravityHelper.ForceMaxFallUntilGround();
-    }
-
-    /// <summary>Aplica el stall físico: vy=0 y gravedad anulada por ms.</summary>
-    public void ApplyStall(float ms = -1f) {
-        float dur = (ms > 0f) ? ms : defaultStallMs;
+        usedThisSeq++;
         if (stallRoutine != null) StopCoroutine(stallRoutine);
-        stallRoutine = StartCoroutine(Co_Stall(dur));
+        stallRoutine = StartCoroutine(Co_StallForMs(Mathf.Max(0f, stallMs)));
+        if (enableDebug) Debug.Log($"{name}: EnemyAirStall aplicado. usados={usedThisSeq}/{maxStallsPerAttackerSeq} seq={attackerAirSeqId}");
+        return true;
     }
 
-    IEnumerator Co_Stall(float ms) {
+    IEnumerator Co_StallForMs(float ms) {
+        if (rb == null) yield break;
+
         IsStalling = true;
 
-        // Zero out vertical inmediatamente
-        Vector2 v = rb.linearVelocity;
+        // Guardar gravedad y forzar vy = 0
+        float prevGravity = rb.gravityScale;
+        var v = rb.linearVelocity;
         v.y = 0f;
         rb.linearVelocity = v;
 
+        // Congelar vertical
+        rb.gravityScale = 0f;
         float tEnd = Time.realtimeSinceStartup + (ms / 1000f);
+
         while (Time.realtimeSinceStartup < tEnd) {
-            Vector2 cur = rb.linearVelocity;
+            var cur = rb.linearVelocity;
             if (cur.y != 0f) {
                 cur.y = 0f;
                 rb.linearVelocity = cur;
@@ -97,7 +87,20 @@ public class simpleEnemyAirStall : MonoBehaviour {
             yield return new WaitForFixedUpdate();
         }
 
+        // Restaurar
+        rb.gravityScale = prevGravity;
         IsStalling = false;
         stallRoutine = null;
+    }
+
+    /// <summary>
+    /// Cancela inmediatamente cualquier stall en curso (para no interferir con arrastre/launch).
+    /// </summary>
+    public void Cancel() {
+        if (stallRoutine != null) {
+            StopCoroutine(stallRoutine);
+            stallRoutine = null;
+        }
+        IsStalling = false;
     }
 }

@@ -5,8 +5,9 @@
 /// - Rampa de caída (downStart -> downMax)
 /// - Mini-rampa en el ápice (apex cushion)
 /// - Respeto de air-stall (simpleEnemyAirStall)
-/// - Modo post-stall: si se activó al menos una vez por Ctrl+S, cae con Max hasta tocar suelo.
+/// - Modo post-stall/drag: si se activó ForceMaxFallUntilGround, cae con perfil forzado hasta tocar suelo.
 /// - Utilidades Height/Time (ConfigureUpGravityFrom, ComputeInitialSpeed)
+/// - Dos topes de velocidad de caída: normal vs durante arrastre
 /// </summary>
 [RequireComponent(typeof(Rigidbody2D))]
 public class simpleEnemyGravity2D : MonoBehaviour {
@@ -20,8 +21,11 @@ public class simpleEnemyGravity2D : MonoBehaviour {
     [Header("Rampa de caída principal")]
     public float fallRampTime = 0.20f;
 
-    [Header("Límites")]
-    public float maxFallSpeed = 25f;
+    [Header("Límites de velocidad (topes)")]
+    [Tooltip("Tope usado en caída normal (por inercia).")]
+    public float maxFallSpeedNormal = 25f;
+    [Tooltip("Tope usado mientras dura un arrastre (finisher).")]
+    public float maxFallSpeedDuringDrag = 150f;
 
     [Header("Apex Cushion (mini-rampa en el ápice)")]
     public bool enableApexCushion = true;
@@ -36,7 +40,7 @@ public class simpleEnemyGravity2D : MonoBehaviour {
     public simpleEnemyAirStall airStall;       // opcional
     public simpleEnemyState state;             // para saber cuándo toca suelo y resetear el modo forzado
 
-    // ===== Post-stall: forzar Max hasta suelo =====
+    // ===== Post-stall/drag: forzar perfil hasta suelo =====
     bool forceMaxFallUntilGround = false;
 
     float fallTimer = 0f;
@@ -53,9 +57,8 @@ public class simpleEnemyGravity2D : MonoBehaviour {
     }
 
     /// <summary>
-    /// Llamado por simpleEnemyAirStall cuando el enemigo recibió al menos un Ctrl+S con stall.
-    /// Activa un modo que, al salir del stall, ignora cushion y rampa y aplica downGravityScaleMax
-    /// hasta que el enemigo vuelve a tocar el suelo.
+    /// Activado por arrastre: ignora cushion y rampa y aplica perfil forzado hasta tocar suelo.
+    /// También usará maxFallSpeedDuringDrag como tope de velocidad.
     /// </summary>
     public void ForceMaxFallUntilGround() {
         forceMaxFallUntilGround = true;
@@ -63,6 +66,21 @@ public class simpleEnemyGravity2D : MonoBehaviour {
         inApexCushion = false;
         cushionTimer = 0f;
         fallTimer = 0f;
+    }
+
+    /// <summary>
+    /// Cancela el modo forzado (por ejemplo, al entrar a una fase nueva).
+    /// Normalmente no hace falta llamarlo: se desactiva solo al tocar suelo.
+    /// </summary>
+    public void CancelForceMaxFallUntilGround() {
+        forceMaxFallUntilGround = false;
+    }
+
+    /// <summary>
+    /// Tope de velocidad de caída actual según contexto.
+    /// </summary>
+    public float GetCurrentMaxFallSpeed() {
+        return forceMaxFallUntilGround ? maxFallSpeedDuringDrag : maxFallSpeedNormal;
     }
 
     void FixedUpdate() {
@@ -108,7 +126,7 @@ public class simpleEnemyGravity2D : MonoBehaviour {
         else if (vel.y < 0f) {
             // CAYENDO
             if (forceMaxFallUntilGround) {
-                // 🚩 Modo forzado: siempre Max hasta suelo (sin cushion, sin rampa)
+                // Modo forzado: siempre Max hasta suelo (sin cushion, sin rampa)
                 inApexCushion = false;
                 cushionTimer = 0f;
                 fallTimer = 0f;
@@ -145,15 +163,17 @@ public class simpleEnemyGravity2D : MonoBehaviour {
                 }
             }
 
-            if (vel.y < -maxFallSpeed) {
-                vel.y = -maxFallSpeed;
+            // Tope de velocidad según contexto (inercia vs arrastre)
+            float cap = GetCurrentMaxFallSpeed();
+            if (vel.y < -cap) {
+                vel.y = -cap;
                 rb.linearVelocity = vel;
             }
         }
         else {
             // ÁPICE exacto (vy == 0)
             if (forceMaxFallUntilGround) {
-                // ✅ FIX: asegurar gravedad máxima para que empiece a caer en el próximo Fixed
+                // Asegurar gravedad máxima para que empiece a caer en el próximo Fixed
                 rb.gravityScale = downGravityScaleMax;
             }
             else if (!inApexCushion) {
@@ -172,8 +192,9 @@ public class simpleEnemyGravity2D : MonoBehaviour {
 
     public void ConfigureUpGravityFrom(float apexHeight, float timeToApex) {
         float gWorld = Mathf.Abs(Physics2D.gravity.y);
-        float gUp = (2f * Mathf.Max(0.0001f, apexHeight)) /
-                    (Mathf.Max(0.0001f, timeToApex) * Mathf.Max(0.0001f, timeToApex));
+        float H = Mathf.Max(0.0001f, apexHeight);
+        float T = Mathf.Max(0.0001f, timeToApex);
+        float gUp = (2f * H) / (T * T);
         upGravityScale = gUp / gWorld;
     }
 
