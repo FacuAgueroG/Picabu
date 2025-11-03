@@ -1,5 +1,11 @@
 ﻿using UnityEngine;
 
+/// <summary>
+/// Controla S/D, combos, HOLDs y finalizadores.
+/// + Integración:
+//  - Finalizador de suelo: DDD(Hold>=3)+S -> ChainBurst (enganche + pull + repel)
+//  - Finalizador de aire:  SSS(Hold>=3)+D EN AIRE -> Aerial Burst de 2 etapas (Parte 2)
+/// </summary>
 public class simpleCombatController : MonoBehaviour {
     [Header("Referencias")]
     public simpleControls controls;
@@ -7,6 +13,16 @@ public class simpleCombatController : MonoBehaviour {
     public simpleAttack attackDArea;
     public simpleGround2D ground;
     public simpleAirStall airStall;
+
+    // === Orquestador del finalizador de suelo ===
+    [Header("Finalizador (suelo) - Chain Burst")]
+    [Tooltip("Controlador que ejecuta el 'enganche' con cadenas (instancias 1/2/3).")]
+    public ChainBurstGroundController chainBurst;
+
+    // === NEW (AerialBurst) ===
+    [Header("Finalizador (aire) - Aerial Burst")]
+    [Tooltip("SSS(Hold>=3)+D en AIRE: empujes en dos etapas y luego libera control.")]
+    public AerialBurstController aerialBurst;
 
     [Header("Combo S (base)")]
     [Tooltip("Tiempo máx entre S válidas para no resetear el combo.")]
@@ -47,7 +63,7 @@ public class simpleCombatController : MonoBehaviour {
 
     [Tooltip("Si D se pulsa MIENTRAS se está 'preparando' el HOLD (tryingToHold), se bufferiza y se consume al entrar en HOLD.")]
     public bool bufferDPreHold = true;
-    [Tooltip("Ventana máx para que ese D buffered se consuma al entrar en HOLD.")]
+    [Tooltip("Ventana máx para que ese D buffered se consuma al entrar al HOLD.")]
     public float dPreHoldBufferWindow = 0.35f; // >= holdTimeS + margen
 
     // ====== Detección espejo D ======
@@ -90,10 +106,16 @@ public class simpleCombatController : MonoBehaviour {
     void Reset() {
         controls = GetComponent<simpleControls>();
         if (airStall == null) airStall = GetComponent<simpleAirStall>();
+        if (chainBurst == null) chainBurst = GetComponent<ChainBurstGroundController>();
+        // NEW (AerialBurst)
+        if (aerialBurst == null) aerialBurst = GetComponent<AerialBurstController>();
     }
 
     void Awake() {
         if (airStall == null) airStall = GetComponent<simpleAirStall>();
+        if (chainBurst == null) chainBurst = GetComponent<ChainBurstGroundController>();
+        // NEW (AerialBurst)
+        if (aerialBurst == null) aerialBurst = GetComponent<AerialBurstController>();
     }
 
     void Update() {
@@ -260,7 +282,7 @@ public class simpleCombatController : MonoBehaviour {
         if (attackSArea.InHold) attackSArea.StopHold();
     }
 
-    // ===================== D (con espejo y finalizador) =====================
+    // ===================== D (con espejo y finalizadores) =====================
 
     void HandleDInput(bool groundedNow) {
         bool airborne = !groundedNow;
@@ -274,16 +296,34 @@ public class simpleCombatController : MonoBehaviour {
                 }
             }
 
-            // PRIORIDAD: D sobre HOLD S ⇒ cancelación + Launch (SSS(HOLD)+D) — SIEMPRE
+            // PRIORIDAD: D sobre HOLD S
             if (attackSArea.InHold) {
                 attackSArea.StopHold();
-                attackDArea.ForceFireOnce(AttackEffectKind.Launch); // <<<<<< forzado
-                ResetSCombo();
 
-                // Contar D para su combo espejo
-                lastDValidTime = Time.time;
-                dCount = Mathf.Max(1, dCount + 1);
-                return;
+                if (groundedNow) {
+                    // SSS(HOLD)+D EN SUELO => Launch (como antes)
+                    attackDArea.ForceFireOnce(AttackEffectKind.Launch);
+                    ResetSCombo();
+
+                    lastDValidTime = Time.time;
+                    dCount = Mathf.Max(1, dCount + 1);
+                    return;
+                }
+                else {
+                    // NEW (AerialBurst): SSS(HOLD)+D EN AIRE => Aerial Burst (dos etapas)
+                    ResetSCombo(); // consumimos la rama S
+                    if (aerialBurst != null) {
+                        aerialBurst.FireTwoStage();
+                    }
+                    else {
+                        // fallback: si no hay controlador, al menos lanzar un D simple
+                        attackDArea.ForceFireOnce(AttackEffectKind.None);
+                    }
+
+                    lastDValidTime = Time.time;
+                    dCount = Mathf.Max(1, dCount + 1);
+                    return;
+                }
             }
 
             // D normal (espejo de S)
@@ -322,11 +362,12 @@ public class simpleCombatController : MonoBehaviour {
             holdDPressStartTime = -1f;
         }
 
-        // FINALIZADOR: DDD(Hold)+S (player debe estar en aire) — SIEMPRE
+        // FINALIZADOR: DDD(Hold)+S
         if (attackDArea.InHold && controls.AttackSDown()) {
             if (!groundedNow) {
+                // Aire -> comportamiento espejo ya existente
                 attackDArea.StopHold();
-                attackSArea.ForceFireOnce(AttackEffectKind.DragToGround); // <<<<<< forzado
+                attackSArea.ForceFireOnce(AttackEffectKind.DragToGround);
                 ResetDCombo();
 
                 lastSValidTime = Time.time;
@@ -334,10 +375,13 @@ public class simpleCombatController : MonoBehaviour {
                 return;
             }
             else {
-                // Si está en suelo, no hay finalización (dispara S normal para no dejar muerta la entrada)
+                // ====== SUELO: ChainBurst (Instancia 3: enganchar + PULL + REPEL) ======
                 attackDArea.StopHold();
-                attackSArea.FireOnce(AttackEffectKind.None);
                 ResetDCombo();
+
+                if (chainBurst != null) {
+                    chainBurst.TriggerBurstInstance3();
+                }
 
                 lastSValidTime = Time.time;
                 sCount = Mathf.Max(1, sCount + 1);
@@ -357,7 +401,7 @@ public class simpleCombatController : MonoBehaviour {
         if (attackSArea.InHold) {
             hasBufferedDPreHold = false;
             attackSArea.StopHold();
-            attackDArea.ForceFireOnce(AttackEffectKind.Launch); // <<<<<< forzado
+            attackDArea.ForceFireOnce(AttackEffectKind.Launch);
             ResetSCombo();
         }
     }
@@ -373,7 +417,7 @@ public class simpleCombatController : MonoBehaviour {
         if (!attackDArea.IsActiveOrCooling && attackDArea.isActiveAndEnabled) {
             hasBufferedDWhileHold = false;
             attackSArea.StopHold();
-            attackDArea.ForceFireOnce(AttackEffectKind.Launch); // <<<<<< forzado
+            attackDArea.ForceFireOnce(AttackEffectKind.Launch);
             ResetSCombo();
         }
     }
